@@ -1,0 +1,26 @@
+services:
+  stock_portfolio_api:
+    build:
+      context: ./stock_portfolio_api
+      dockerfile: Dockerfile
+    image: stock_portfolio_api:v0.0.1
+    container_name: stock_portfolio_api
+    environment:
+      STOCKS_DATA_PATH: /app/stocks_data.csv
+      MODELS_OUTPUT_DIR: /app/models_output_json
+    volumes:
+      - ./models_output_json:/app/models_output_json
+      - ./stocks_data.csv:/app/stocks_data.csv
+    ports:
+      - "5001:5001"
+
+  stock_ai_dashboard:
+    build:
+      context: ./stock-ai-dashboard
+      dockerfile: Dockerfile
+    image: stock-ai-dashboard:v0.0.1
+    container_name: stock_ai_dashboard
+    depends_on:
+      - stock_portfolio_api
+    ports:
+      - "5173:80"
