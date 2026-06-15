@@ -1,3 +1,4 @@
 Flask==3.1.0
+Flask-Compress==1.16
 flasgger==0.9.7.1
 pandas==2.2.3

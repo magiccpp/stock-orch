@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 import pandas as pd
 from flask import Flask, jsonify
+from flask_compress import Compress
 from flasgger import Swagger
 
 
@@ -32,6 +33,26 @@ def create_app() -> Flask:
     app = Flask(__name__)
 
     app.config["JSON_SORT_KEYS"] = False
+    # Compress larger responses such as historical portfolio payloads.
+    app.config["COMPRESS_MIMETYPES"] = [
+        "application/json",
+        "application/javascript",
+        "text/css",
+        "text/html",
+        "text/xml",
+        "text/plain",
+        "image/svg+xml",
+    ]
+    app.config["COMPRESS_LEVEL"] = int(os.getenv("COMPRESS_LEVEL", "6"))
+    app.config["COMPRESS_MIN_SIZE"] = int(
+        os.getenv("COMPRESS_MIN_SIZE", "1024")
+    )
+    app.config["COMPRESS_ALGORITHM"] = os.getenv(
+        "COMPRESS_ALGORITHM", "gzip"
+    )
+
+    Compress(app)
+
     app.config["SWAGGER"] = {
         "title": "Stock AI Portfolio API",
         "uiversion": 3,
