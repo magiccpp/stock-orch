@@ -22,9 +22,16 @@ export default function App() {
     try {
       const payload = await stockApi.getModels(controller.signal);
       const nextModels = payload.models || [];
+      const preferredModel = nextModels.includes('human') ? 'human' : (nextModels[0] || '');
       setModels(nextModels);
-      setSelectedModels((current) => current.length ? current.filter((m) => nextModels.includes(m)) : nextModels.slice(0, Math.min(2, nextModels.length)));
-      setFocusedModel((current) => nextModels.includes(current) ? current : nextModels[0] || '');
+      setSelectedModels((current) => {
+        if (current.length) {
+          return current.filter((m) => nextModels.includes(m));
+        }
+
+        return preferredModel ? [preferredModel] : [];
+      });
+      setFocusedModel((current) => nextModels.includes(current) ? current : preferredModel);
     } catch (e) {
       setError(e.message);
     } finally {
