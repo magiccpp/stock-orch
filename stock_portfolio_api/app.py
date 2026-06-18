@@ -117,7 +117,7 @@ def calculate_model_returns(stock_data: pd.DataFrame, sp500_prices: pd.Series, p
             current_portfolio = parse_portfolio_data(portfolio_data)
             portfolio_idx += 1
         
-        # Calculate returns (skip first day if no previous data)
+        # Default first-day returns to zero since there is no previous day.
         model_return = 0.0
         sp500_return = 0.0
         
@@ -152,15 +152,13 @@ def calculate_model_returns(stock_data: pd.DataFrame, sp500_prices: pd.Series, p
             model_cumulative *= (1 + model_return)
             sp500_cumulative *= (1 + sp500_return)
         
-        # Only add data starting from the second day (when we can calculate returns)
-        if i > 0:
-            returns_data.append({
-                "date": date.strftime("%Y-%m-%d"),
-                "model_return": round(model_return, 6),
-                "sp500_return": round(sp500_return, 6),
-                "model_cumulative_return": round(model_cumulative - 1, 6),
-                "sp500_cumulative_return": round(sp500_cumulative - 1, 6),
-            })
+        returns_data.append({
+            "date": date.strftime("%Y-%m-%d"),
+            "model_return": round(model_return, 6),
+            "sp500_return": round(sp500_return, 6),
+            "model_cumulative_return": round(model_cumulative - 1, 6),
+            "sp500_cumulative_return": round(sp500_cumulative - 1, 6),
+        })
     
     return returns_data
 
