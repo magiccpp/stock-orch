@@ -20,6 +20,9 @@ STOCKS_DATA_PATH = Path(
     os.getenv("STOCKS_DATA_PATH", BASE_DIR / "stocks_data.csv")
 ).resolve()
 
+_STOCKS_DATA_CACHE: pd.DataFrame | None = None
+_STOCKS_DATA_CACHE_MTIME_NS: int | None = None
+
 # Matches filenames such as:
 # portfolio_20260615.json
 # model_result_v2_20260615.json
@@ -160,6 +163,35 @@ def calculate_model_returns(stock_data: pd.DataFrame, sp500_prices: pd.Series, p
             })
     
     return returns_data
+
+
+def load_stocks_data() -> pd.DataFrame:
+    global _STOCKS_DATA_CACHE
+    global _STOCKS_DATA_CACHE_MTIME_NS
+
+    if not STOCKS_DATA_PATH.exists():
+        raise ApiError(
+            404,
+            "Stock data not found",
+            f"Stock data file not found at: {STOCKS_DATA_PATH}",
+        )
+
+    current_mtime_ns = STOCKS_DATA_PATH.stat().st_mtime_ns
+    if (
+        _STOCKS_DATA_CACHE is not None
+        and _STOCKS_DATA_CACHE_MTIME_NS == current_mtime_ns
+    ):
+        return _STOCKS_DATA_CACHE
+
+    stock_data = pd.read_csv(STOCKS_DATA_PATH)
+
+    # Ensure the first column is treated as date and convert to datetime.
+    stock_data.iloc[:, 0] = pd.to_datetime(stock_data.iloc[:, 0])
+    stock_data = stock_data.set_index(stock_data.columns[0]).sort_index()
+
+    _STOCKS_DATA_CACHE = stock_data
+    _STOCKS_DATA_CACHE_MTIME_NS = current_mtime_ns
+    return stock_data
 
 
 def parse_portfolio_data(portfolio_data: Any) -> dict[str, float]:
@@ -349,15 +381,15 @@ def register_routes(app: Flask) -> None:
             description: Exact subdirectory name under models_output_json
             example: momentum_model
         responses:
-          200:
+                    200:
             description: Returns data returned successfully
             content:
               application/json:
-                schema:
+                                schema:
                   type: object
                   properties:
                     model_name:
-                      type: string
+                                            type: string
                     returns:
                       type: array
                       items:
@@ -365,18 +397,18 @@ def register_routes(app: Flask) -> None:
                         properties:
                           date:
                             type: string
-                            format: date
+                                                        format: date
                           model_return:
                             type: number
                           sp500_return:
                             type: number
                           model_cumulative_return:
-                            type: number
+                                                        type: number
                           sp500_cumulative_return:
                             type: number
           400:
             description: Invalid model name
-          404:
+                    404:
             description: Model not found or no stock data available
           500:
             description: Error reading stock data or calculating returns
@@ -384,21 +416,8 @@ def register_routes(app: Flask) -> None:
         try:
             # Validate model exists
             model_dir = resolve_model_directory(model_name)
-            
-            # Read stock data
-            if not STOCKS_DATA_PATH.exists():
-                return error_response(
-                    404,
-                    "Stock data not found",
-                    f"Stock data file not found at: {STOCKS_DATA_PATH}",
-                )
-            
-            stock_data = pd.read_csv(STOCKS_DATA_PATH)
-            
-            # Ensure the first column is treated as date and convert to datetime
-            stock_data.iloc[:, 0] = pd.to_datetime(stock_data.iloc[:, 0])
-            stock_data = stock_data.set_index(stock_data.columns[0]).sort_index()
-            
+            stock_data = load_stocks_data()
+
             # Get S&P 500 data (last column)
             sp500_prices = stock_data.iloc[:, -1]
             

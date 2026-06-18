@@ -123,4 +123,4 @@ that every portfolio file has the same internal schema:
 cd ..
 docker run -v models_output_json:/app/models_output_json -e MODELS_OUTPUT_DIR="/app/models_output_json" stock_portfolio_api:latest
 ```
-docker run -v ./models_output_json:/app/models_output_json  -v ./stocks_data.csv:/app/stocks_data.csv -e STOCKS_DATA_PATH="/app/stocks_data.csv"  -e MODELS_OUTPUT_DIR="/app/models_output_json" -p 5001:5001 stock_portfolio_api:v0.0.1
+docker run -v ./models_output_json:/app/models_output_json  -v ./stocks_data.csv:/app/stocks_data.csv -e STOCKS_DATA_PATH="/app/stocks_data.csv" -e MODELS_OUTPUT_DIR="/app/models_output_json" -p 5001:5001 stock_portfolio_api:v0.0.1
