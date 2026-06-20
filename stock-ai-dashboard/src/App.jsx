@@ -7,8 +7,10 @@ import { buildPerformanceSeries, mergePerformanceSeries } from './lib/normalizer
 
 export default function App() {
   const [models, setModels] = useState([]);
-  const [selectedModels, setSelectedModels] = useState([]);
-  const [focusedModel, setFocusedModel] = useState('');
+  const [selectedModels, setSelectedModels] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('selectedModels')) || []; } catch { return []; }
+  });
+  const [focusedModel, setFocusedModel] = useState(() => localStorage.getItem('focusedModel') || '');
   const [histories, setHistories] = useState({});
   const [portfolioIndex, setPortfolioIndex] = useState({});
   const [loadingModels, setLoadingModels] = useState(true);
@@ -41,6 +43,9 @@ export default function App() {
   }, []);
 
   useEffect(() => { loadModels(); }, [loadModels]);
+
+  useEffect(() => { localStorage.setItem('selectedModels', JSON.stringify(selectedModels)); }, [selectedModels]);
+  useEffect(() => { localStorage.setItem('focusedModel', focusedModel); }, [focusedModel]);
 
   useEffect(() => {
     const missing = selectedModels.filter((model) => !histories[model]);
