@@ -87,6 +87,7 @@ def calculate_model_returns(stock_data: pd.DataFrame, sp500_prices: pd.Series, p
     """
     Calculate daily returns for the model portfolio and S&P 500 starting from the first portfolio date.
     """
+    print("calculate_model_returns")
     if not portfolio_files:
         return []
     
@@ -102,51 +103,47 @@ def calculate_model_returns(stock_data: pd.DataFrame, sp500_prices: pd.Series, p
     
     if len(available_dates) == 0:
         return []  # No stock data available from the portfolio start date
-    
+
+    # Precompute per-stock returns using each stock's own consecutive valid trading dates.
+    # dropna() ensures pct_change() steps over NaN rows (e.g. different market holidays).
+    stock_returns_map: dict[str, pd.Series] = {
+        col: stock_data[col].dropna().pct_change()
+        for col in stock_data.columns
+    }
+    sp500_pct = sp500_prices.dropna().pct_change()
+
     # Initialize cumulative returns
     model_cumulative = 1.0
     sp500_cumulative = 1.0
-    
+
     for i, date in enumerate(available_dates):
-        date_str = date.strftime("%Y%m%d")
-        
         # Load new portfolio if available for this date or before
-        while (portfolio_idx < len(portfolio_files) and 
-               portfolio_files[portfolio_idx][0] <= date):
+        while (portfolio_idx < len(portfolio_files) and
+               portfolio_files[portfolio_idx][0] < date):
             portfolio_data = read_json_file(portfolio_files[portfolio_idx][1])
             current_portfolio = parse_portfolio_data(portfolio_data)
             portfolio_idx += 1
-        
+
         # Default first-day returns to zero since there is no previous day.
         model_return = 0.0
         sp500_return = 0.0
-        
+
         if i > 0:  # Skip first day since we need previous day for return calculation
-            prev_date = available_dates[i-1]
-            
             # Calculate model return
             if current_portfolio:
-                for stock, weight in current_portfolio.items():
-                    if stock in stock_data.columns:
-                        try:
-                            current_price = stock_data.loc[date, stock]
-                            previous_price = stock_data.loc[prev_date, stock]
-                            
-                            if pd.notna(current_price) and pd.notna(previous_price) and previous_price != 0:
-                                stock_return = (current_price - previous_price) / previous_price
-                                model_return += weight * stock_return
-                        except (KeyError, ValueError):
-                            continue
-            
+                # Only include stocks that traded on this specific date.
+                stocks = [s for s in current_portfolio
+                          if s in stock_returns_map and date in stock_returns_map[s].index]
+                if stocks:
+                    weights = pd.Series({s: current_portfolio[s] for s in stocks})
+                    returns = pd.Series({s: stock_returns_map[s].loc[date] for s in stocks})
+                    valid = returns.notna()
+                    if valid.any():
+                        model_return = float(weights[valid].dot(returns[valid]))
+                print(f"Model return for date {date}: {model_return}")
             # Calculate S&P 500 return
-            try:
-                current_sp500 = sp500_prices.loc[date]
-                previous_sp500 = sp500_prices.loc[prev_date]
-                
-                if pd.notna(current_sp500) and pd.notna(previous_sp500) and previous_sp500 != 0:
-                    sp500_return = (current_sp500 - previous_sp500) / previous_sp500
-            except (KeyError, ValueError):
-                sp500_return = 0.0
+            if date in sp500_pct.index and pd.notna(sp500_pct.loc[date]):
+                sp500_return = float(sp500_pct.loc[date])
             
             # Update cumulative returns
             model_cumulative *= (1 + model_return)
