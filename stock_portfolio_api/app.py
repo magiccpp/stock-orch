@@ -176,7 +176,10 @@ def load_stocks_data() -> pd.DataFrame:
         _STOCKS_DATA_CACHE is not None
         and _STOCKS_DATA_CACHE_MTIME_NS == current_mtime_ns
     ):
+        print("Using cached stock data")
         return _STOCKS_DATA_CACHE
+    
+    print(f"Loading stock data from {STOCKS_DATA_PATH}")
 
     stock_data = pd.read_csv(STOCKS_DATA_PATH)
 
