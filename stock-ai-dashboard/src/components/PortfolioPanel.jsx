@@ -40,17 +40,20 @@ export default function PortfolioPanel({ modelName, history, index, onIndexChang
   const sorted = useMemo(() => {
     if (!sortCol) return holdings;
     return [...holdings].sort((a, b) => {
-      let va, vb;
+      const assetA = a.id.toLowerCase();
+      const assetB = b.id.toLowerCase();
+      const weightA = a.weight == null ? -Infinity : Math.round(a.weight * 10000) / 100;
+      const weightB = b.weight == null ? -Infinity : Math.round(b.weight * 10000) / 100;
+
       if (sortCol === 'asset') {
-        va = a.id.toLowerCase();
-        vb = b.id.toLowerCase();
-      } else {
-        va = a.weight ?? -Infinity;
-        vb = b.weight ?? -Infinity;
+        return assetA < assetB ? (sortDir === 'asc' ? -1 : 1) : (sortDir === 'asc' ? 1 : -1);
       }
-      if (va < vb) return sortDir === 'asc' ? -1 : 1;
-      if (va > vb) return sortDir === 'asc' ? 1 : -1;
-      return 0;
+
+      if (weightA < weightB) return sortDir === 'asc' ? -1 : 1;
+      if (weightA > weightB) return sortDir === 'asc' ? 1 : -1;
+      if (assetA < assetB) return -1;
+      if (assetA > assetB) return 1;
+      return 0; // tie-break: asset, descending
     });
   }, [holdings, sortCol, sortDir]);
 
