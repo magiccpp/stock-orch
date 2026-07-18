@@ -25,8 +25,8 @@ export default function PortfolioPanel({ modelName, history, index, onIndexChang
   const holdings = useMemo(() => withWeightDeltas(normalizeHoldings(entry?.portfolio), prevHoldings), [entry, prevHoldings]);
   const latest = entries.length ? index === entries.length - 1 : false;
 
-  const [sortCol, setSortCol] = useState(null);
-  const [sortDir, setSortDir] = useState('asc');
+  const [sortCol, setSortCol] = useState('weight');
+  const [sortDir, setSortDir] = useState('desc');
 
   function handleSort(col) {
     if (sortCol === col) {
