@@ -1,6 +1,6 @@
-import { BrainCircuit, Check, RefreshCw } from 'lucide-react';
+import { BrainCircuit, Check, RefreshCw, Eye, Users } from 'lucide-react';
 
-export default function ModelSidebar({ models, selected, focusedModel, loading, onToggle, onFocus, onRefresh }) {
+export default function ModelSidebar({ models, selected, focusedModel, loading, onToggle, onFocus, onRefresh, visits }) {
   return (
     <aside className="sidebar panel">
       <div className="brand">
@@ -37,6 +37,13 @@ export default function ModelSidebar({ models, selected, focusedModel, loading, 
       </div>
 
       <div className="sidebar-note">Select several strategies to compare returns. Click a row to inspect its portfolio.</div>
+
+      {visits && (
+        <div className="visit-stats">
+          <div className="visit-stat"><Eye size={13} /><strong>{visits.total}</strong><span>Visits</span></div>
+          <div className="visit-stat"><Users size={13} /><strong>{visits.unique_visitors}</strong><span>Unique</span></div>
+        </div>
+      )}
     </aside>
   );
 }

@@ -1,11 +1,12 @@
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
-async function request(path, signal) {
+async function request(path, signal, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
       Accept: 'application/json',
     },
     signal,
+    ...options,
   });
 
   const rawBody = await response.text();
@@ -45,4 +46,8 @@ export const stockApi = {
     request(`/api/models/${encodeURIComponent(modelName)}/portfolio/latest`, signal),
   getPortfolios: (modelName, signal) =>
     request(`/api/models/${encodeURIComponent(modelName)}/portfolios`, signal),
+  getDescription: (modelName, signal) =>
+    request(`/api/models/${encodeURIComponent(modelName)}/description`, signal),
+  recordVisit: (signal) => request('/api/visits', signal, { method: 'POST' }),
+  getVisits: (signal) => request('/api/visits', signal),
 };

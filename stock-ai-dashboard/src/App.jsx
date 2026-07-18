@@ -16,6 +16,15 @@ export default function App() {
   const [loadingModels, setLoadingModels] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
   const [error, setError] = useState('');
+  const [visits, setVisits] = useState(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    stockApi.recordVisit(controller.signal)
+      .then(setVisits)
+      .catch((e) => { if (e.name !== 'AbortError') console.error(e); });
+    return () => controller.abort();
+  }, []);
 
   const loadModels = useCallback(async () => {
     const controller = new AbortController();
@@ -120,7 +129,7 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      <ModelSidebar models={models} selected={selectedModels} focusedModel={displayModel} loading={loadingModels} onToggle={toggleModel} onFocus={setFocusedModel} onRefresh={loadModels} />
+      <ModelSidebar models={models} selected={selectedModels} focusedModel={displayModel} loading={loadingModels} onToggle={toggleModel} onFocus={setFocusedModel} onRefresh={loadModels} visits={visits} />
       <div className="workspace">
         {error && <div className="error-banner"><strong>API error:</strong> {error}</div>}
         <PerformanceChart data={chartData} models={selectedModels} loading={loadingData} />

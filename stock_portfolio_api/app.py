@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 import pandas as pd
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_compress import Compress
 from flasgger import Swagger
 
@@ -19,6 +20,11 @@ MODELS_OUTPUT_DIR = Path(
 STOCKS_DATA_PATH = Path(
     os.getenv("STOCKS_DATA_PATH", BASE_DIR / "stocks_data.csv")
 ).resolve()
+VISITS_DATA_PATH = Path(
+    os.getenv("VISITS_DATA_PATH", BASE_DIR / "data" / "visits.json")
+).resolve()
+
+_visits_lock = threading.Lock()
 
 _STOCKS_DATA_CACHE: pd.DataFrame | None = None
 _STOCKS_DATA_CACHE_MTIME_NS: int | None = None
@@ -524,6 +530,122 @@ def register_routes(app: Flask) -> None:
             }
         )
 
+    @app.get("/api/models/<string:model_name>/description")
+    def get_model_description(model_name: str):
+        """
+        Get the description of a model.
+        ---
+        tags:
+          - Models
+        summary: Get a model's description
+        parameters:
+          - in: path
+            name: model_name
+            required: true
+            schema:
+              type: string
+            description: Exact subdirectory name under models_output_json
+            example: momentum_model
+        responses:
+          200:
+            description: Description returned successfully (null if none exists)
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    model_name:
+                      type: string
+                    description:
+                      type: string
+                      nullable: true
+          400:
+            description: Invalid model name
+          404:
+            description: Model not found
+        """
+        model_dir = resolve_model_directory(model_name)
+        desc_path = model_dir / "desc.txt"
+
+        description = None
+        if desc_path.is_file():
+            try:
+                description = desc_path.read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                return error_response(
+                    500,
+                    "Could not read description file",
+                    f"Could not read '{desc_path.name}': {exc}",
+                )
+
+        return jsonify(
+            {
+                "model_name": model_name,
+                "description": description or None,
+            }
+        )
+
+    @app.post("/api/visits")
+    def record_visit():
+        """
+        Record a page visit and return updated visit counters.
+        ---
+        tags:
+          - Visits
+        summary: Record a visit and return total/unique counts
+        responses:
+          200:
+            description: Visit recorded successfully
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    total:
+                      type: integer
+                    unique_visitors:
+                      type: integer
+        """
+        ip = _client_ip()
+        with _visits_lock:
+            data = _load_visits()
+            data["total"] += 1
+            if ip not in data["unique_ips"]:
+                data["unique_ips"].append(ip)
+            _save_visits(data)
+            total = data["total"]
+            unique_visitors = len(data["unique_ips"])
+
+        return jsonify({"total": total, "unique_visitors": unique_visitors})
+
+    @app.get("/api/visits")
+    def get_visits():
+        """
+        Get current visit counters without recording a new visit.
+        ---
+        tags:
+          - Visits
+        summary: Get visit counters
+        responses:
+          200:
+            description: Visit counters returned successfully
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    total:
+                      type: integer
+                    unique_visitors:
+                      type: integer
+        """
+        with _visits_lock:
+            data = _load_visits()
+
+        return jsonify(
+            {"total": data["total"], "unique_visitors": len(data["unique_ips"])}
+        )
+
     @app.get("/health")
     def health():
         """
@@ -543,6 +665,34 @@ def register_routes(app: Flask) -> None:
                 "directory_exists": MODELS_OUTPUT_DIR.is_dir(),
             }
         )
+
+
+def _client_ip() -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.remote_addr or "unknown"
+
+
+def _load_visits() -> dict:
+    if not VISITS_DATA_PATH.is_file():
+        return {"total": 0, "unique_ips": []}
+    try:
+        with VISITS_DATA_PATH.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return {"total": 0, "unique_ips": []}
+    data.setdefault("total", 0)
+    data.setdefault("unique_ips", [])
+    return data
+
+
+def _save_visits(data: dict) -> None:
+    VISITS_DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = VISITS_DATA_PATH.with_suffix(".tmp")
+    with tmp_path.open("w", encoding="utf-8") as file:
+        json.dump(data, file)
+    tmp_path.replace(VISITS_DATA_PATH)
 
 
 def ensure_output_directory() -> None:

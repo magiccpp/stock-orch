@@ -30,9 +30,11 @@ services:
     environment:
       STOCKS_DATA_PATH: /app/stocks_data.csv
       MODELS_OUTPUT_DIR: /app/models_output_json
+      VISITS_DATA_PATH: /app/data/visits.json
     volumes:
       - ./models_output_json:/app/models_output_json
       - ./stocks_data.csv:/app/stocks_data.csv
+      - ./data:/app/data
     ports:
       - "5001:5001"
 

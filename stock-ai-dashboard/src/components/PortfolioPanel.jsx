@@ -1,6 +1,7 @@
-import { useState, useMemo } from 'react';
-import { ChevronLeft, ChevronRight, Layers3, ChevronUp, ChevronDown, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { useState, useMemo, useEffect } from 'react';
+import { ChevronLeft, ChevronRight, Layers3, ChevronUp, ChevronDown, TrendingUp, TrendingDown, Minus, Info } from 'lucide-react';
 import { normalizeHoldings, withWeightDeltas, formatPercent, formatDelta } from '../lib/normalizers.js';
+import { stockApi } from '../lib/api.js';
 
 function SortIcon({ column, sortCol, sortDir }) {
   if (sortCol !== column) return <span className="sort-icon sort-icon--idle"><ChevronUp size={10} /><ChevronDown size={10} /></span>;
@@ -27,6 +28,17 @@ export default function PortfolioPanel({ modelName, history, index, onIndexChang
 
   const [sortCol, setSortCol] = useState('weight');
   const [sortDir, setSortDir] = useState('desc');
+
+  const [description, setDescription] = useState('');
+  useEffect(() => {
+    setDescription('');
+    if (!modelName) return;
+    const controller = new AbortController();
+    stockApi.getDescription(modelName, controller.signal)
+      .then((payload) => setDescription(payload.description || ''))
+      .catch((e) => { if (e.name !== 'AbortError') console.error(e); });
+    return () => controller.abort();
+  }, [modelName]);
 
   function handleSort(col) {
     if (sortCol === col) {
@@ -67,6 +79,10 @@ export default function PortfolioPanel({ modelName, history, index, onIndexChang
           <button className="icon-button" disabled={index >= entries.length - 1 || loading} onClick={() => onIndexChange(index + 1)} aria-label="Next portfolio"><ChevronRight size={18} /></button>
         </div>
       </div>
+
+      {description && (
+        <div className="model-description"><Info size={14} /><span>{description}</span></div>
+      )}
 
       {holdings.length ? (
         <div className="holdings-table">
