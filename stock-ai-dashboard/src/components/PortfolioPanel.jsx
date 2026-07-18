@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
-import { ChevronLeft, ChevronRight, Layers3, ChevronUp, ChevronDown } from 'lucide-react';
-import { normalizeHoldings, formatPercent } from '../lib/normalizers.js';
+import { ChevronLeft, ChevronRight, Layers3, ChevronUp, ChevronDown, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { normalizeHoldings, withWeightDeltas, formatPercent, formatDelta } from '../lib/normalizers.js';
 
 function SortIcon({ column, sortCol, sortDir }) {
   if (sortCol !== column) return <span className="sort-icon sort-icon--idle"><ChevronUp size={10} /><ChevronDown size={10} /></span>;
@@ -9,10 +9,20 @@ function SortIcon({ column, sortCol, sortDir }) {
     : <span className="sort-icon sort-icon--active"><ChevronDown size={10} /></span>;
 }
 
+function DeltaBadge({ holding }) {
+  if (holding.isNew) return <span className="delta-badge delta-new">New</span>;
+  if (holding.delta == null) return null;
+  const rounded = Math.round(holding.delta * 100 * 100) / 100;
+  if (rounded > 0) return <span className="delta-badge delta-up"><TrendingUp size={11} />{formatDelta(holding.delta)}</span>;
+  if (rounded < 0) return <span className="delta-badge delta-down"><TrendingDown size={11} />{formatDelta(holding.delta)}</span>;
+  return <span className="delta-badge delta-flat"><Minus size={11} />0.00%</span>;
+}
+
 export default function PortfolioPanel({ modelName, history, index, onIndexChange, loading }) {
   const entries = history?.portfolios || [];
   const entry = entries[index];
-  const holdings = normalizeHoldings(entry?.portfolio);
+  const prevHoldings = useMemo(() => normalizeHoldings(entries[index - 1]?.portfolio), [entries, index]);
+  const holdings = useMemo(() => withWeightDeltas(normalizeHoldings(entry?.portfolio), prevHoldings), [entry, prevHoldings]);
   const latest = entries.length ? index === entries.length - 1 : false;
 
   const [sortCol, setSortCol] = useState(null);
@@ -65,7 +75,7 @@ export default function PortfolioPanel({ modelName, history, index, onIndexChang
           {sorted.map((holding) => (
             <div className="table-row" key={holding.key}>
               <div className="asset-cell"><div className="asset-logo">{holding.id.slice(0, 2).toUpperCase()}</div><strong>{holding.id}</strong></div>
-              <strong>{formatPercent(holding.weight)}</strong>
+              <div className="weight-cell"><strong>{formatPercent(holding.weight)}</strong><DeltaBadge holding={holding} /></div>
               <div className="allocation"><div style={{ width: holding.weight == null ? '0%' : `${Math.max(0, Math.min(100, holding.weight * 100))}%` }} /></div>
             </div>
           ))}

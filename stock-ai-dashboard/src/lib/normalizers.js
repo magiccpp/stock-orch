@@ -75,3 +75,20 @@ export function normalizeHoldings(portfolio) {
 export function formatPercent(value) {
   return value == null ? '—' : `${(value * 100).toFixed(2)}%`;
 }
+
+export function withWeightDeltas(holdings, prevHoldings) {
+  const hasPrev = Boolean(prevHoldings?.length);
+  const prevWeightById = new Map((prevHoldings || []).map((h) => [h.id, h.weight]));
+
+  return holdings.map((holding) => {
+    const prevWeight = prevWeightById.has(holding.id) ? prevWeightById.get(holding.id) : null;
+    const delta = holding.weight != null && prevWeight != null ? holding.weight - prevWeight : null;
+    return { ...holding, prevWeight, delta, isNew: hasPrev && !prevWeightById.has(holding.id) };
+  });
+}
+
+export function formatDelta(value) {
+  if (value == null) return '';
+  const sign = value > 0 ? '+' : '';
+  return `${sign}${(value * 100).toFixed(2)}%`;
+}
