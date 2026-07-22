@@ -47,7 +47,7 @@ model_dir = './models_output_json'
 def load_data(trace_log_dir):
     trace_log = []
     folder = trace_log_dir
-    files = os.listdir(folder)
+    files = [f for f in os.listdir(folder) if f.endswith('.json')]
     files.sort()
 
     for file in files:
