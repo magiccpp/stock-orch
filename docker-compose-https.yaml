@@ -21,6 +21,45 @@ services:
       - ./certbot/www:/var/www/certbot
       - ./certbot/conf:/etc/letsencrypt
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: stock_portfolio_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stock_portfolio}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-stock_portfolio}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # No published port here on purpose: the database should only be
+    # reachable from other containers on this compose network, never
+    # exposed directly to the internet.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stock_portfolio} -d ${POSTGRES_DB:-stock_portfolio}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Outbound-only mail relay. This container alone does NOT get you real
+  # deliverability -- self-hosted SMTP on a generic cloud IP is routinely
+  # rejected or spam-boxed by Gmail/Outlook. Point RELAYHOST at a real
+  # transactional email provider's SMTP endpoint (Amazon SES, SendGrid,
+  # Mailgun, Postmark, ...) via the env vars below; this container then
+  # relays the app's mail through that authenticated connection so the app
+  # itself never has to hold the provider credentials directly. Until those
+  # vars are set, the container starts but simply won't relay anything
+  # (ALLOWED_SENDER_DOMAINS empty = refuses to send, fails safe).
+  postfix:
+    image: boky/postfix:latest
+    container_name: stock_portfolio_postfix
+    restart: unless-stopped
+    environment:
+      POSTFIX_myhostname: ${MAIL_HOSTNAME:-mail.localhost}
+      ALLOWED_SENDER_DOMAINS: ${MAIL_SENDER_DOMAINS:-}
+      RELAYHOST: ${MAIL_RELAYHOST:-}
+      RELAYHOST_USERNAME: ${MAIL_RELAYHOST_USERNAME:-}
+      RELAYHOST_PASSWORD: ${MAIL_RELAYHOST_PASSWORD:-}
+
   stock_portfolio_api:
     build:
       context: ./stock_portfolio_api
@@ -31,12 +70,24 @@ services:
       STOCKS_DATA_PATH: /app/stocks_data.csv
       MODELS_OUTPUT_DIR: /app/models_output_json
       VISITS_DATA_PATH: /app/data/visits.json
+      DATABASE_URL: postgresql://${POSTGRES_USER:-stock_portfolio}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-stock_portfolio}
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://xiaodong.io}
+      SESSION_COOKIE_SECURE: "true"
+      SMTP_HOST: postfix
+      SMTP_PORT: "587"
+      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-no-reply@localhost}
     volumes:
       - ./models_output_json:/app/models_output_json
       - ./stocks_data.csv:/app/stocks_data.csv
       - ./data:/app/data
     ports:
       - "5001:5001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postfix:
+        condition: service_started
 
   stock_ai_dashboard:
     build:
@@ -49,3 +100,5 @@ services:
     ports:
       - "5173:80"
 
+volumes:
+  postgres_data:

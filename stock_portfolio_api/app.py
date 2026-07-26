@@ -4,13 +4,18 @@ import json
 import os
 import re
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 import pandas as pd
 from flask import Flask, jsonify, request
 from flask_compress import Compress
 from flasgger import Swagger
+
+import db
+from auth import register_auth_routes
+from errors import ApiError, error_response
+from utils import client_ip
 
 
 BASE_DIR = Path('/app')
@@ -23,6 +28,10 @@ STOCKS_DATA_PATH = Path(
 VISITS_DATA_PATH = Path(
     os.getenv("VISITS_DATA_PATH", BASE_DIR / "data" / "visits.json")
 ).resolve()
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY environment variable must be set")
 
 _visits_lock = threading.Lock()
 
@@ -47,6 +56,14 @@ PORTFOLIO_FILE_PATTERN = re.compile(
 
 def create_app() -> Flask:
     app = Flask(__name__)
+
+    app.config["SECRET_KEY"] = SECRET_KEY
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = (
+        os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true"
+    )
+    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
 
     app.config["JSON_SORT_KEYS"] = False
     # Compress larger responses such as historical portfolio payloads.
@@ -91,7 +108,9 @@ def create_app() -> Flask:
         },
     )
 
+    db.init_db()
     register_routes(app)
+    register_auth_routes(app)
     register_error_handlers(app)
     return app
 
@@ -919,7 +938,7 @@ def register_routes(app: Flask) -> None:
                     unique_visitors:
                       type: integer
         """
-        ip = _client_ip()
+        ip = client_ip()
         with _visits_lock:
             data = _load_visits()
             data["total"] += 1
@@ -978,13 +997,6 @@ def register_routes(app: Flask) -> None:
                 "directory_exists": MODELS_OUTPUT_DIR.is_dir(),
             }
         )
-
-
-def _client_ip() -> str:
-    forwarded = request.headers.get("X-Forwarded-For", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.remote_addr or "unknown"
 
 
 def _load_visits() -> dict:
@@ -1108,27 +1120,6 @@ def read_json_file(path: Path) -> Any:
             "Could not read portfolio file",
             f"Could not read '{path.name}': {exc}",
         ) from exc
-
-
-class ApiError(Exception):
-    def __init__(self, status_code: int, error: str, message: str):
-        super().__init__(message)
-        self.status_code = status_code
-        self.error = error
-        self.message = message
-
-
-def error_response(status_code: int, error: str, message: str):
-    return (
-        jsonify(
-            {
-                "error": error,
-                "message": message,
-                "status": status_code,
-            }
-        ),
-        status_code,
-    )
 
 
 def register_error_handlers(app: Flask) -> None:

@@ -1,4 +1,36 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: stock_portfolio_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stock_portfolio}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-stock_portfolio}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # No published port: only stock_portfolio_api needs to reach this, over
+    # the internal Docker network as "postgres:5432". Use
+    # `docker compose exec postgres psql -U ... ` for local access instead.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stock_portfolio} -d ${POSTGRES_DB:-stock_portfolio}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Dev-only fake SMTP server: catches every email the app sends instead of
+  # delivering it, so login/verification flows can be tested without
+  # spamming real inboxes or needing any external provider. View captured
+  # mail at http://localhost:8025.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: stock_portfolio_mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025" # web UI, for viewing captured mail in your browser
+    # SMTP (1025) is intentionally not published: only stock_portfolio_api
+    # needs it, reached internally as "mailpit:1025".
+
   stock_portfolio_api:
     build:
       context: ./stock_portfolio_api
@@ -9,12 +41,23 @@ services:
       STOCKS_DATA_PATH: /app/stocks_data.csv
       MODELS_OUTPUT_DIR: /app/models_output_json
       VISITS_DATA_PATH: /app/data/visits.json
+      DATABASE_URL: postgresql://${POSTGRES_USER:-stock_portfolio}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-stock_portfolio}
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:5173}
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-no-reply@localhost}
     volumes:
       - ./models_output_json:/app/models_output_json
       - ./stocks_data.csv:/app/stocks_data.csv
       - ./data:/app/data
     ports:
       - "5001:5001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
 
   stock_ai_dashboard:
     build:
@@ -26,3 +69,6 @@ services:
       - stock_portfolio_api
     ports:
       - "5173:80"
+
+volumes:
+  postgres_data:

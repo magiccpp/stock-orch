@@ -1,1 +1,3 @@
 data/visits.json
+.env
+__pycache__/

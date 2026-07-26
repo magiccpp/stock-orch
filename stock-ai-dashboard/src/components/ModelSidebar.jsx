@@ -1,4 +1,5 @@
 import { BrainCircuit, Check, RefreshCw, Eye, Users } from 'lucide-react';
+import AuthPanel from './AuthPanel.jsx';
 
 export default function ModelSidebar({ models, selected, focusedModel, loading, onToggle, onFocus, onRefresh, visits }) {
   return (
@@ -7,6 +8,8 @@ export default function ModelSidebar({ models, selected, focusedModel, loading, 
         <div className="brand-icon"><BrainCircuit size={22} /></div>
         <div><strong>Stock AI Orchestrator</strong><span>Model intelligence</span></div>
       </div>
+
+      <AuthPanel />
 
       <div className="section-heading">
         <div><span className="eyebrow">Models</span><h2>Strategies</h2></div>

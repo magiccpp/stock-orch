@@ -4,7 +4,9 @@ async function request(path, signal, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
       Accept: 'application/json',
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
     },
+    credentials: 'same-origin',
     signal,
     ...options,
   });
@@ -55,4 +57,15 @@ export const stockApi = {
     ),
   recordVisit: (signal) => request('/api/visits', signal, { method: 'POST' }),
   getVisits: (signal) => request('/api/visits', signal),
+};
+
+export const authApi = {
+  me: (signal) => request('/api/auth/me', signal),
+  register: (email, password, signal) =>
+    request('/api/auth/register', signal, { method: 'POST', body: JSON.stringify({ email, password }) }),
+  login: (email, password, signal) =>
+    request('/api/auth/login', signal, { method: 'POST', body: JSON.stringify({ email, password }) }),
+  logout: (signal) => request('/api/auth/logout', signal, { method: 'POST' }),
+  resendVerification: (email, signal) =>
+    request('/api/auth/resend-verification', signal, { method: 'POST', body: JSON.stringify({ email }) }),
 };
