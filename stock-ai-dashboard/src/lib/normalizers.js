@@ -92,3 +92,18 @@ export function formatDelta(value) {
   const sign = value > 0 ? '+' : '';
   return `${sign}${(value * 100).toFixed(2)}%`;
 }
+
+// Portfolios are sorted ascending by date. Returns the index of the last
+// one on/before `date`, falling back to the earliest available portfolio
+// if none qualifies (e.g. date predates the whole history).
+export function findClosestPortfolioIndex(portfolios, date) {
+  let closestIndex = 0;
+  for (let i = 0; i < portfolios.length; i++) {
+    if (portfolios[i].portfolio_date <= date) {
+      closestIndex = i;
+    } else {
+      break;
+    }
+  }
+  return closestIndex;
+}

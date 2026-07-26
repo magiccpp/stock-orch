@@ -48,6 +48,11 @@ export const stockApi = {
     request(`/api/models/${encodeURIComponent(modelName)}/portfolios`, signal),
   getDescription: (modelName, signal) =>
     request(`/api/models/${encodeURIComponent(modelName)}/description`, signal),
+  getReturnsInRange: (symbols, start, end, signal) =>
+    request(
+      `/api/stocks/returns?symbols=${encodeURIComponent(symbols.join(','))}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
+      signal,
+    ),
   recordVisit: (signal) => request('/api/visits', signal, { method: 'POST' }),
   getVisits: (signal) => request('/api/visits', signal),
 };

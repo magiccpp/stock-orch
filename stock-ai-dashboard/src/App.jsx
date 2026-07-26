@@ -3,7 +3,7 @@ import ModelSidebar from './components/ModelSidebar.jsx';
 import PerformanceChart from './components/PerformanceChart.jsx';
 import PortfolioPanel from './components/PortfolioPanel.jsx';
 import { stockApi } from './lib/api.js';
-import { buildPerformanceSeries, mergePerformanceSeries } from './lib/normalizers.js';
+import { buildPerformanceSeries, mergePerformanceSeries, findClosestPortfolioIndex } from './lib/normalizers.js';
 
 export default function App() {
   const [models, setModels] = useState([]);
@@ -13,6 +13,7 @@ export default function App() {
   const [focusedModel, setFocusedModel] = useState(() => localStorage.getItem('focusedModel') || '');
   const [histories, setHistories] = useState({});
   const [portfolioIndex, setPortfolioIndex] = useState({});
+  const [rangeSelection, setRangeSelection] = useState(null);
   const [loadingModels, setLoadingModels] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
   const [error, setError] = useState('');
@@ -127,13 +128,34 @@ export default function App() {
     setFocusedModel(model);
   }
 
+  function handleChartDateSelect(date) {
+    setRangeSelection(null);
+    const portfolios = displayHistory?.portfolios;
+    if (!date || !displayModel || !portfolios?.length) return;
+    const closestIndex = findClosestPortfolioIndex(portfolios, date);
+    setPortfolioIndex((current) => ({ ...current, [displayModel]: closestIndex }));
+  }
+
+  function handleChartRangeSelect(start, end) {
+    if (!start || !end) return;
+    setRangeSelection({ start, end });
+  }
+
   return (
     <main className="app-shell">
       <ModelSidebar models={models} selected={selectedModels} focusedModel={displayModel} loading={loadingModels} onToggle={toggleModel} onFocus={setFocusedModel} onRefresh={loadModels} visits={visits} />
       <div className="workspace">
         {error && <div className="error-banner"><strong>API error:</strong> {error}</div>}
-        <PerformanceChart data={chartData} models={selectedModels} loading={loadingData} />
-        <PortfolioPanel modelName={displayModel} history={displayHistory} index={displayIndex} loading={loadingData} onIndexChange={(index) => setPortfolioIndex((current) => ({ ...current, [displayModel]: index }))} />
+        <PerformanceChart data={chartData} models={selectedModels} loading={loadingData} onSelectDate={handleChartDateSelect} onSelectRange={handleChartRangeSelect} selectedRange={rangeSelection} />
+        <PortfolioPanel
+          modelName={displayModel}
+          history={displayHistory}
+          index={displayIndex}
+          loading={loadingData}
+          onIndexChange={(index) => setPortfolioIndex((current) => ({ ...current, [displayModel]: index }))}
+          rangeSelection={rangeSelection}
+          onClearRange={() => setRangeSelection(null)}
+        />
       </div>
     </main>
   );

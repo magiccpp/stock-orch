@@ -29,6 +29,13 @@ _visits_lock = threading.Lock()
 _STOCKS_DATA_CACHE: pd.DataFrame | None = None
 _STOCKS_DATA_CACHE_MTIME_NS: int | None = None
 
+# Per-model cache of computed portfolio entries (including the
+# returns_until_next_change calculation, which is expensive since it walks
+# every held stock for every historical portfolio). Keyed by model_name,
+# valued as (cache_key, portfolios).
+_PORTFOLIO_RETURNS_CACHE: dict[str, tuple[Any, list[dict[str, Any]]]] = {}
+_PORTFOLIO_RETURNS_CACHE_LOCK = threading.Lock()
+
 # Matches filenames such as:
 # portfolio_20260615.json
 # model_result_v2_20260615.json
@@ -164,6 +171,198 @@ def calculate_model_returns(stock_data: pd.DataFrame, sp500_prices: pd.Series, p
         })
     
     return returns_data
+
+
+def calculate_stock_return(
+    price_series: pd.Series, start_date: datetime, end_date: datetime
+) -> float | None:
+    """
+    Return the fractional price change of a single stock from the last
+    trading close before start_date through the last trading close on/before
+    end_date.
+
+    The baseline is anchored to the close *before* start_date (rather than
+    start_date's own close) so that start_date's own move is included in the
+    result. This matters because portfolio filenames are dated in Beijing
+    time while stock_data is indexed by New York trading dates: a portfolio
+    dated e.g. 2026-07-17 is typically already decided using the 07-17 NY
+    close and held from that day forward, so 07-17's own return belongs to
+    it -- not just returns from 07-18 onwards. Without this, a portfolio
+    replaced the very next calendar day would span zero trading dates and
+    report no return at all.
+
+    Falls back to start_date's own close as the baseline only when there is
+    no earlier trading data at all (e.g. start_date is the first date in the
+    series).
+
+    Returns None if there isn't enough data to compute a return.
+    """
+    valid = price_series.dropna()
+    before_start = valid.index[valid.index < start_date]
+    end_candidates = valid.index[valid.index <= end_date]
+
+    if len(end_candidates) == 0:
+        return None
+
+    if len(before_start) > 0:
+        start_date_actual = before_start[-1]
+    else:
+        on_or_after_start = valid.index[valid.index >= start_date]
+        if len(on_or_after_start) == 0:
+            return None
+        start_date_actual = on_or_after_start[0]
+
+    end_date_actual = end_candidates[-1]
+
+    if end_date_actual <= start_date_actual:
+        return None
+
+    start_price = valid.loc[start_date_actual]
+    if start_price == 0:
+        return None
+
+    end_price = valid.loc[end_date_actual]
+    return float(end_price / start_price - 1)
+
+
+def calculate_range_return(
+    price_series: pd.Series, start_date: datetime, end_date: datetime
+) -> float | None:
+    """
+    Return the fractional price change of a single stock between the first
+    available trading date on/after start_date and the last available
+    trading date on/before end_date -- a plain, literal date-range return.
+
+    Unlike calculate_stock_return(), this does NOT anchor to the close
+    before start_date. That anchoring exists specifically to compensate for
+    portfolio filenames being timezone-shifted relative to stock_data; here
+    start_date/end_date come directly from the performance chart's own
+    trading-date axis (a user's drag-selection on the chart), so they are
+    already aligned to stock_data's index and no such shift is needed.
+
+    Returns None if there isn't enough data to compute a return.
+    """
+    valid = price_series.dropna()
+    start_candidates = valid.index[valid.index >= start_date]
+    end_candidates = valid.index[valid.index <= end_date]
+
+    if len(start_candidates) == 0 or len(end_candidates) == 0:
+        return None
+
+    start_date_actual = start_candidates[0]
+    end_date_actual = end_candidates[-1]
+
+    if end_date_actual <= start_date_actual:
+        return None
+
+    start_price = valid.loc[start_date_actual]
+    if start_price == 0:
+        return None
+
+    end_price = valid.loc[end_date_actual]
+    return float(end_price / start_price - 1)
+
+
+def calculate_returns_until_next_change(
+    stock_data: pd.DataFrame,
+    holdings: dict[str, float],
+    portfolio_date: datetime,
+    end_date: datetime,
+) -> dict[str, float]:
+    """
+    For a single portfolio, compute each held stock's return from
+    portfolio_date until end_date (the date of the next portfolio, or the
+    latest available trading date if this is the current portfolio).
+    """
+    returns = {}
+    for symbol in holdings:
+        if symbol not in stock_data.columns:
+            continue
+        stock_return = calculate_stock_return(
+            stock_data[symbol], portfolio_date, end_date
+        )
+        if stock_return is not None:
+            returns[symbol] = round(stock_return, 6)
+    return returns
+
+
+def _build_portfolio_entries(
+    files: list[tuple[datetime, Path]], stock_data: pd.DataFrame | None
+) -> list[dict[str, Any]]:
+    """
+    Read every portfolio file for a model and, if stock_data is available,
+    compute each one's returns_until_next_change. This walks every held
+    stock for every historical portfolio, so it's the expensive part of
+    serving portfolio history -- callers should go through
+    get_portfolio_entries_cached() rather than calling this on every
+    request.
+    """
+    last_available_date = (
+        stock_data.index.max() if stock_data is not None else None
+    )
+
+    portfolios = []
+    for i, (portfolio_date, path) in enumerate(files):
+        portfolio_json = read_json_file(path)
+        is_current = i + 1 >= len(files)
+        end_date = last_available_date if is_current else files[i + 1][0]
+
+        returns_until_next_change = {}
+        if stock_data is not None and end_date is not None:
+            holdings = parse_portfolio_data(portfolio_json)
+            returns_until_next_change = calculate_returns_until_next_change(
+                stock_data, holdings, portfolio_date, end_date
+            )
+
+        portfolios.append(
+            {
+                "portfolio_date": portfolio_date.strftime("%Y-%m-%d"),
+                "filename": path.name,
+                "portfolio": portfolio_json,
+                "returns_until_next_change": returns_until_next_change,
+                "return_until_date": (
+                    end_date.strftime("%Y-%m-%d")
+                    if end_date is not None
+                    else None
+                ),
+                "is_current_portfolio": is_current,
+            }
+        )
+
+    return portfolios
+
+
+def get_portfolio_entries_cached(
+    model_name: str,
+    files: list[tuple[datetime, Path]],
+    stock_data: pd.DataFrame | None,
+) -> list[dict[str, Any]]:
+    """
+    Cached wrapper around _build_portfolio_entries(). The per-stock return
+    calculations are recomputed at most once per calendar day, and sooner
+    if this model's portfolio files or the underlying stock price data have
+    changed since the last computation (so newly published portfolios still
+    show up immediately instead of waiting for the daily boundary).
+    """
+    files_signature = tuple(
+        (path.name, path.stat().st_mtime_ns) for _, path in files
+    )
+    stock_data_signature = (
+        _STOCKS_DATA_CACHE_MTIME_NS if stock_data is not None else None
+    )
+    cache_key = (datetime.now().date(), files_signature, stock_data_signature)
+
+    with _PORTFOLIO_RETURNS_CACHE_LOCK:
+        cached = _PORTFOLIO_RETURNS_CACHE.get(model_name)
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
+
+    portfolios = _build_portfolio_entries(files, stock_data)
+
+    with _PORTFOLIO_RETURNS_CACHE_LOCK:
+        _PORTFOLIO_RETURNS_CACHE[model_name] = (cache_key, portfolios)
+
+    return portfolios
 
 
 def load_stocks_data() -> pd.DataFrame:
@@ -494,6 +693,19 @@ def register_routes(app: Flask) -> None:
                             type: string
                           portfolio:
                             description: JSON content from one source file
+                          returns_until_next_change:
+                            description: >
+                              Map of {stock: return} earned by each held
+                              stock between this portfolio's date and the
+                              next portfolio's date (or the latest available
+                              trading date for the current portfolio).
+                            type: object
+                          return_until_date:
+                            type: string
+                            format: date
+                            nullable: true
+                          is_current_portfolio:
+                            type: boolean
           400:
             description: Invalid model name
           404:
@@ -512,21 +724,122 @@ def register_routes(app: Flask) -> None:
                 f"'{model_name}'.",
             )
 
-        portfolios = []
-        for portfolio_date, path in files:
-            portfolios.append(
-                {
-                    "portfolio_date": portfolio_date.strftime("%Y-%m-%d"),
-                    "filename": path.name,
-                    "portfolio": read_json_file(path),
-                }
-            )
+        try:
+            stock_data = load_stocks_data()
+        except ApiError:
+            stock_data = None
+
+        portfolios = get_portfolio_entries_cached(model_name, files, stock_data)
 
         return jsonify(
             {
                 "model_name": model_name,
                 "count": len(portfolios),
                 "portfolios": portfolios,
+            }
+        )
+
+    @app.get("/api/stocks/returns")
+    def get_stock_returns_in_range():
+        """
+        Get each requested stock's price return over an arbitrary date range.
+        ---
+        tags:
+          - Returns
+        summary: Get returns for a set of stocks between two dates
+        description: >
+          Used by the "drag to select a range" feature on the performance
+          chart: given the stocks held by any portfolio touched by that
+          range and the range's two endpoints, returns each stock's price
+          change between them.
+        parameters:
+          - in: query
+            name: symbols
+            required: true
+            schema:
+              type: string
+            description: Comma-separated stock symbols matching stocks_data.csv columns
+            example: AAPL,GOOG
+          - in: query
+            name: start
+            required: true
+            schema:
+              type: string
+              format: date
+          - in: query
+            name: end
+            required: true
+            schema:
+              type: string
+              format: date
+        responses:
+          200:
+            description: Returns computed successfully
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    start_date:
+                      type: string
+                      format: date
+                    end_date:
+                      type: string
+                      format: date
+                    returns:
+                      description: Map of {stock: return}; symbols with insufficient data are omitted
+                      type: object
+          400:
+            description: Missing or invalid symbols/start/end parameters
+          404:
+            description: Stock data not found
+        """
+        symbols = [
+            symbol.strip()
+            for symbol in request.args.get("symbols", "").split(",")
+            if symbol.strip()
+        ]
+        if not symbols:
+            return error_response(
+                400,
+                "Missing symbols",
+                "Query parameter 'symbols' must contain at least one stock symbol.",
+            )
+
+        try:
+            start_date = datetime.strptime(request.args.get("start", ""), "%Y-%m-%d")
+            end_date = datetime.strptime(request.args.get("end", ""), "%Y-%m-%d")
+        except ValueError:
+            return error_response(
+                400,
+                "Invalid date",
+                "Query parameters 'start' and 'end' must be YYYY-MM-DD dates.",
+            )
+
+        if end_date < start_date:
+            return error_response(
+                400,
+                "Invalid date range",
+                "'end' must be on or after 'start'.",
+            )
+
+        stock_data = load_stocks_data()
+
+        returns = {}
+        for symbol in symbols:
+            if symbol not in stock_data.columns:
+                continue
+            stock_return = calculate_range_return(
+                stock_data[symbol], start_date, end_date
+            )
+            if stock_return is not None:
+                returns[symbol] = round(stock_return, 6)
+
+        return jsonify(
+            {
+                "start_date": start_date.strftime("%Y-%m-%d"),
+                "end_date": end_date.strftime("%Y-%m-%d"),
+                "returns": returns,
             }
         )
 

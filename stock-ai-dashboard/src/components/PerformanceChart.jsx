@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceArea,
 } from 'recharts';
-import { Activity, TrendingUp } from 'lucide-react';
+import { Activity, TrendingUp, MousePointerSquareDashed, X } from 'lucide-react';
 import { formatPercent } from '../lib/normalizers.js';
 
 const LINE_COLORS = ['#58a6ff', '#a78bfa', '#2dd4bf', '#f59e0b', '#fb7185', '#84cc16', '#22d3ee'];
+const HINT_DISMISSED_KEY = 'chartDragHintDismissed';
 
 function ChartTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
@@ -22,10 +23,40 @@ function ChartTooltip({ active, payload, label }) {
   );
 }
 
-export default function PerformanceChart({ models, loading: externalLoading }) {
+export default function PerformanceChart({ models, loading: externalLoading, onSelectDate, onSelectRange, selectedRange }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [drag, setDrag] = useState({ left: null, right: null, active: false });
+  const [hintDismissed, setHintDismissed] = useState(() => localStorage.getItem(HINT_DISMISSED_KEY) === 'true');
+
+  function dismissHint() {
+    setHintDismissed(true);
+    localStorage.setItem(HINT_DISMISSED_KEY, 'true');
+  }
+
+  function handleMouseDown(chartState) {
+    if (!chartState?.activeLabel) return;
+    setDrag({ left: chartState.activeLabel, right: chartState.activeLabel, active: true });
+  }
+
+  function handleMouseMove(chartState) {
+    if (!drag.active || !chartState?.activeLabel) return;
+    setDrag((current) => ({ ...current, right: chartState.activeLabel }));
+  }
+
+  function finishDrag() {
+    if (!drag.active) return;
+    const { left, right } = drag;
+    setDrag({ left: null, right: null, active: false });
+    if (!left) return;
+    if (right && right !== left) {
+      const [start, end] = left < right ? [left, right] : [right, left];
+      onSelectRange?.(start, end);
+    } else {
+      onSelectDate?.(left);
+    }
+  }
 
   useEffect(() => {
     if (!models || models.length === 0) {
@@ -94,6 +125,14 @@ export default function PerformanceChart({ models, loading: externalLoading }) {
   const hasData = data.length > 0 && !error;
   const allSeries = hasData ? ['S&P 500', ...models] : [];
 
+  // While actively dragging, preview the in-progress selection. Otherwise
+  // fall back to the persisted selection from the parent, so the
+  // highlighted area stays visible after mouseup until a new plain click
+  // (or an explicit clear) resets it.
+  const displayRange = drag.active
+    ? (drag.left && drag.right && drag.left !== drag.right ? { left: drag.left, right: drag.right } : null)
+    : (selectedRange ? { left: selectedRange.start, right: selectedRange.end } : null);
+
   return (
     <section className="chart-panel panel">
       <div className="panel-header">
@@ -119,6 +158,14 @@ export default function PerformanceChart({ models, loading: externalLoading }) {
         </div>
       </div>
 
+      {hasData && !hintDismissed && (onSelectDate || onSelectRange) && (
+        <div className="chart-hint">
+          <MousePointerSquareDashed size={14} />
+          <span>Click a date to jump the portfolio explorer there, or <strong>drag across the chart</strong> to inspect a whole date range.</span>
+          <button className="chart-hint-close" onClick={dismissHint} aria-label="Dismiss hint"><X size={13} /></button>
+        </div>
+      )}
+
       <div className="chart-wrap">
         {error ? (
           <div className="error-state">
@@ -128,7 +175,15 @@ export default function PerformanceChart({ models, loading: externalLoading }) {
           </div>
         ) : hasData ? (
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={data} margin={{ top: 12, right: 18, left: 2, bottom: 4 }}>
+            <LineChart
+              data={data}
+              margin={{ top: 12, right: 18, left: 2, bottom: 4 }}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={finishDrag}
+              onMouseLeave={() => setDrag({ left: null, right: null, active: false })}
+              style={{ cursor: onSelectDate || onSelectRange ? 'crosshair' : undefined, userSelect: 'none' }}
+            >
               <CartesianGrid 
                 strokeDasharray="3 6" 
                 vertical={false} 
@@ -190,9 +245,13 @@ export default function PerformanceChart({ models, loading: externalLoading }) {
                   strokeWidth={2.4} 
                   dot={false} 
                   connectNulls 
-                  activeDot={{ r: 5 }} 
+                  activeDot={{ r: 5 }}
                 />
               ))}
+
+              {displayRange && (
+                <ReferenceArea x1={displayRange.left} x2={displayRange.right} strokeOpacity={0.4} stroke="#60a5fa" fill="#60a5fa" fillOpacity={0.12} />
+              )}
             </LineChart>
           </ResponsiveContainer>
         ) : (
