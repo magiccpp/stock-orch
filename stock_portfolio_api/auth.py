@@ -197,6 +197,13 @@ def register_auth_routes(app: Flask) -> None:
           400:
             description: Invalid or expired token (HTML page)
         """
+        if request.method == "HEAD":
+            # Flask routes HEAD to this same view by default. Email clients
+            # (e.g. Outlook Safe Links) send a HEAD request to prescan links
+            # before the user ever clicks -- HEAD must be side-effect-free
+            # per HTTP semantics, so skip token consumption here entirely.
+            return "", 200
+
         token = request.args.get("token", "")
         user = db.get_user_by_verification_token(token) if token else None
 

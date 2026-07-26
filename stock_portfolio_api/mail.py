@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import smtplib
 from email.message import EmailMessage
+from email.utils import formatdate, make_msgid
 
 SMTP_HOST = os.getenv("SMTP_HOST")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "25"))
@@ -17,6 +18,8 @@ def send_email(to_address: str, subject: str, body: str) -> None:
     message["From"] = MAIL_FROM_ADDRESS
     message["To"] = to_address
     message["Subject"] = subject
+    message["Date"] = formatdate(localtime=True)
+    message["Message-ID"] = make_msgid(domain=MAIL_FROM_ADDRESS.split("@")[-1])
     message.set_content(body)
 
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as smtp:
