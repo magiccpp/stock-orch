@@ -18,26 +18,10 @@ services:
       timeout: 5s
       retries: 10
 
-  # Dev-only fake SMTP server: catches every email the app sends instead of
-  # delivering it, so login/verification flows can be tested without
-  # spamming real inboxes or needing any external provider. View captured
-  # mail at http://localhost:8025. This is stock_portfolio_api's default
-  # mail target (SMTP_HOST=mailpit below) -- switch SMTP_HOST/SMTP_PORT in
-  # .env to "postfix"/587 once Brevo is configured (see the postfix service)
-  # if you want dev to deliver to real inboxes instead.
-  mailpit:
-    image: axllent/mailpit:latest
-    container_name: stock_portfolio_mailpit
-    restart: unless-stopped
-    ports:
-      - "8025:8025" # web UI, for viewing captured mail in your browser
-    # SMTP (1025) is intentionally not published: only stock_portfolio_api
-    # needs it, reached internally as "mailpit:1025".
-
-  # Real outbound relay, same as docker-compose-https.yaml -- opt into this
-  # from dev by setting SMTP_HOST=postfix and SMTP_PORT=587 in .env (on top
-  # of the MAIL_RELAYHOST* vars). Left unconfigured it fails safe (starts,
-  # relays nothing), so it's harmless to leave running alongside mailpit.
+  # Outbound relay, same as docker-compose-https.yaml -- stock_portfolio_api
+  # sends through this via SMTP_HOST=postfix/SMTP_PORT=587 below, which
+  # relays to the real MAIL_RELAYHOST (Gmail) configured in .env. Left
+  # unconfigured it fails safe (starts, relays nothing).
   postfix:
     image: boky/postfix:latest
     container_name: stock_portfolio_postfix
@@ -62,8 +46,8 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-stock_portfolio}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-stock_portfolio}
       SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:5173}
-      SMTP_HOST: ${SMTP_HOST:-mailpit}
-      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_HOST: ${SMTP_HOST:-postfix}
+      SMTP_PORT: ${SMTP_PORT:-587}
       MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-no-reply@localhost}
     volumes:
       - ./models_output_json:/app/models_output_json
@@ -74,8 +58,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      mailpit:
-        condition: service_started
       postfix:
         condition: service_started
 
