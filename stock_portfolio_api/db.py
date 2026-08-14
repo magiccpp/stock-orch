@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
+import pandas as pd
 import psycopg2
 import psycopg2.extras
 from psycopg2.pool import SimpleConnectionPool
@@ -54,6 +55,73 @@ def init_db() -> None:
                 verification_token TEXT,
                 verification_token_expires_at TIMESTAMPTZ,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS models (
+                name TEXT PRIMARY KEY,
+                description TEXT
+            )
+            """
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS portfolios (
+                id SERIAL PRIMARY KEY,
+                model_name TEXT NOT NULL REFERENCES models(name) ON DELETE CASCADE,
+                portfolio_date DATE NOT NULL,
+                filename TEXT NOT NULL,
+                portfolio_data JSONB NOT NULL,
+                returns_until_next_change JSONB,
+                return_until_date DATE,
+                is_current_portfolio BOOLEAN NOT NULL DEFAULT FALSE,
+                UNIQUE (model_name, filename)
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_portfolios_model_date "
+            "ON portfolios (model_name, portfolio_date)"
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS stock_prices (
+                symbol TEXT NOT NULL,
+                price_date DATE NOT NULL,
+                price DOUBLE PRECISION NOT NULL,
+                PRIMARY KEY (symbol, price_date)
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_stock_prices_date "
+            "ON stock_prices (price_date)"
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS model_returns (
+                model_name TEXT NOT NULL REFERENCES models(name) ON DELETE CASCADE,
+                return_date DATE NOT NULL,
+                model_return DOUBLE PRECISION NOT NULL,
+                sp500_return DOUBLE PRECISION NOT NULL,
+                model_cumulative_return DOUBLE PRECISION NOT NULL,
+                sp500_cumulative_return DOUBLE PRECISION NOT NULL,
+                PRIMARY KEY (model_name, return_date)
+            )
+            """
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             )
             """
         )
@@ -128,3 +196,249 @@ def set_verification_token(
             """,
             (token, expires_at, user_id),
         )
+
+
+# --- Models / portfolios / stock prices / returns -----------------------
+#
+# Populated by import_data.py (run daily); the Flask API only ever reads
+# these, it never touches the models_output_json / stocks_data.csv files
+# directly.
+
+
+def upsert_model(name: str, description: str | None) -> None:
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO models (name, description)
+            VALUES (%s, %s)
+            ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description
+            """,
+            (name, description),
+        )
+
+
+def get_all_model_names() -> list[str]:
+    with get_cursor() as cur:
+        cur.execute("SELECT name FROM models ORDER BY name")
+        return [row["name"] for row in cur.fetchall()]
+
+
+def model_exists(name: str) -> bool:
+    with get_cursor() as cur:
+        cur.execute("SELECT 1 FROM models WHERE name = %s", (name,))
+        return cur.fetchone() is not None
+
+
+def get_model_description(name: str) -> str | None:
+    with get_cursor() as cur:
+        cur.execute("SELECT description FROM models WHERE name = %s", (name,))
+        row = cur.fetchone()
+        return row["description"] if row else None
+
+
+def get_existing_portfolio_filenames(model_name: str) -> set[str]:
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT filename FROM portfolios WHERE model_name = %s", (model_name,)
+        )
+        return {row["filename"] for row in cur.fetchall()}
+
+
+def insert_portfolio(
+    model_name: str, portfolio_date: date, filename: str, portfolio_data: Any
+) -> None:
+    """
+    No-ops if (model_name, filename) already exists -- callers are expected
+    to have already filtered with get_existing_portfolio_filenames(), this
+    is just a second layer of protection against double-importing.
+    """
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO portfolios (model_name, portfolio_date, filename, portfolio_data)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (model_name, filename) DO NOTHING
+            """,
+            (model_name, portfolio_date, filename, psycopg2.extras.Json(portfolio_data)),
+        )
+
+
+def get_portfolios_for_model(model_name: str) -> list[dict[str, Any]]:
+    """Returns portfolios ordered ascending by portfolio_date, filename."""
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT portfolio_date, filename, portfolio_data,
+                   COALESCE(returns_until_next_change, '{}'::jsonb) AS returns_until_next_change,
+                   return_until_date, is_current_portfolio
+            FROM portfolios
+            WHERE model_name = %s
+            ORDER BY portfolio_date, filename
+            """,
+            (model_name,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def get_latest_portfolio(model_name: str) -> dict[str, Any] | None:
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT portfolio_date, filename, portfolio_data
+            FROM portfolios
+            WHERE model_name = %s
+            ORDER BY portfolio_date DESC, filename DESC
+            LIMIT 1
+            """,
+            (model_name,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def update_portfolio_windows(model_name: str, windows: list[dict[str, Any]]) -> None:
+    """
+    windows: dicts with "filename", "returns_until_next_change",
+    "return_until_date", "is_current_portfolio" -- see
+    portfolio_calc.build_portfolio_return_windows().
+    """
+    with get_cursor() as cur:
+        for window in windows:
+            cur.execute(
+                """
+                UPDATE portfolios
+                SET returns_until_next_change = %s,
+                    return_until_date = %s,
+                    is_current_portfolio = %s
+                WHERE model_name = %s AND filename = %s
+                """,
+                (
+                    psycopg2.extras.Json(window["returns_until_next_change"]),
+                    window["return_until_date"],
+                    window["is_current_portfolio"],
+                    model_name,
+                    window["filename"],
+                ),
+            )
+
+
+def insert_stock_prices_if_missing(rows: list[tuple[str, date, float]]) -> int:
+    """rows: (symbol, price_date, price). Returns the number of rows inserted."""
+    if not rows:
+        return 0
+    with get_cursor() as cur:
+        # fetch=True makes execute_values() collect the RETURNING output
+        # across every page, so the count is accurate regardless of paging
+        # (plain cur.rowcount would only reflect the last page).
+        inserted = psycopg2.extras.execute_values(
+            cur,
+            """
+            INSERT INTO stock_prices (symbol, price_date, price)
+            VALUES %s
+            ON CONFLICT (symbol, price_date) DO NOTHING
+            RETURNING 1
+            """,
+            rows,
+            page_size=5000,
+            fetch=True,
+        )
+        return len(inserted)
+
+
+def get_setting(key: str) -> str | None:
+    with get_cursor() as cur:
+        cur.execute("SELECT value FROM settings WHERE key = %s", (key,))
+        row = cur.fetchone()
+        return row["value"] if row else None
+
+
+def set_setting(key: str, value: str) -> None:
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO settings (key, value) VALUES (%s, %s)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """,
+            (key, value),
+        )
+
+
+def load_stock_data_frame() -> pd.DataFrame:
+    """
+    Returns the full stock_prices table pivoted into the same shape the API
+    used to load from stocks_data.csv: rows indexed by date, one column per
+    symbol.
+    """
+    with get_cursor() as cur:
+        cur.execute("SELECT symbol, price_date, price FROM stock_prices")
+        rows = cur.fetchall()
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["price_date"] = pd.to_datetime(df["price_date"])
+    return df.pivot(index="price_date", columns="symbol", values="price").sort_index()
+
+
+def get_stock_price_series(symbol: str) -> pd.Series:
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT price_date, price FROM stock_prices "
+            "WHERE symbol = %s ORDER BY price_date",
+            (symbol,),
+        )
+        rows = cur.fetchall()
+    if not rows:
+        return pd.Series(dtype=float)
+    index = pd.to_datetime([row["price_date"] for row in rows])
+    return pd.Series([row["price"] for row in rows], index=index)
+
+
+def replace_model_returns(model_name: str, returns_data: list[dict[str, Any]]) -> None:
+    """
+    Upserts one row per entry in returns_data (as produced by
+    portfolio_calc.calculate_model_returns()) keyed on (model_name, date).
+    """
+    if not returns_data:
+        return
+    rows = [
+        (
+            model_name,
+            entry["date"],
+            entry["model_return"],
+            entry["sp500_return"],
+            entry["model_cumulative_return"],
+            entry["sp500_cumulative_return"],
+        )
+        for entry in returns_data
+    ]
+    with get_cursor() as cur:
+        psycopg2.extras.execute_values(
+            cur,
+            """
+            INSERT INTO model_returns
+                (model_name, return_date, model_return, sp500_return,
+                 model_cumulative_return, sp500_cumulative_return)
+            VALUES %s
+            ON CONFLICT (model_name, return_date) DO UPDATE SET
+                model_return = EXCLUDED.model_return,
+                sp500_return = EXCLUDED.sp500_return,
+                model_cumulative_return = EXCLUDED.model_cumulative_return,
+                sp500_cumulative_return = EXCLUDED.sp500_cumulative_return
+            """,
+            rows,
+        )
+
+
+def get_model_returns(model_name: str) -> list[dict[str, Any]]:
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT return_date, model_return, sp500_return,
+                   model_cumulative_return, sp500_cumulative_return
+            FROM model_returns
+            WHERE model_name = %s
+            ORDER BY return_date
+            """,
+            (model_name,),
+        )
+        return [dict(row) for row in cur.fetchall()]
