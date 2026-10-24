@@ -147,9 +147,15 @@ def register_routes(app: Flask) -> None:
                       example:
                         - momentum_model
                         - value_model
+                    ibkr_models:
+                      type: array
+                      description: Models that are traded on IBKR and have real returns
+                      items:
+                        type: string
         """
         models = db.get_all_model_names()
-        return jsonify({"count": len(models), "models": models})
+        ibkr_models = [m for m in db.get_ibkr_model_names() if m in models]
+        return jsonify({"count": len(models), "models": models, "ibkr_models": ibkr_models})
 
     @app.get("/api/models/<string:model_name>/portfolio/latest")
     def get_latest_portfolio(model_name: str):
@@ -250,6 +256,18 @@ def register_routes(app: Flask) -> None:
                             type: number
                           sp500_cumulative_return:
                             type: number
+                          ibkr_return:
+                            type: number
+                            nullable: true
+                            description: Real daily return on the IBKR account (null if not traded that day)
+                          ibkr_cumulative_return:
+                            type: number
+                            nullable: true
+                            description: Real cumulative return since ibkr_start_date
+                    ibkr_start_date:
+                      type: string
+                      format: date
+                      nullable: true
           400:
             description: Invalid model name
           404:
@@ -258,18 +276,50 @@ def register_routes(app: Flask) -> None:
         require_model(model_name)
         rows = db.get_model_returns(model_name)
 
-        returns_data = [
-            {
+        returns_by_date = {
+            _date_str(row["return_date"]): {
                 "date": _date_str(row["return_date"]),
                 "model_return": row["model_return"],
                 "sp500_return": row["sp500_return"],
                 "model_cumulative_return": row["model_cumulative_return"],
                 "sp500_cumulative_return": row["sp500_cumulative_return"],
+                "ibkr_return": None,
+                "ibkr_cumulative_return": None,
             }
             for row in rows
-        ]
+        }
 
-        return jsonify({"model_name": model_name, "returns": returns_data})
+        # Real IBKR returns can be a day ahead of the theoretical ones (the
+        # price file may not have the latest close yet), so their dates are
+        # added even when the theoretical series has no row for them.
+        ibkr_rows = db.get_ibkr_returns(model_name)
+        cumulative = 1.0
+        for row in ibkr_rows:
+            day = _date_str(row["return_date"])
+            cumulative *= 1 + row["real_return"]
+            entry = returns_by_date.setdefault(
+                day,
+                {
+                    "date": day,
+                    "model_return": None,
+                    "sp500_return": None,
+                    "model_cumulative_return": None,
+                    "sp500_cumulative_return": None,
+                },
+            )
+            entry["ibkr_return"] = row["real_return"]
+            entry["ibkr_cumulative_return"] = round(cumulative - 1, 6)
+
+        returns_data = [returns_by_date[day] for day in sorted(returns_by_date)]
+        ibkr_start = _date_str(ibkr_rows[0]["return_date"]) if ibkr_rows else None
+
+        return jsonify(
+            {
+                "model_name": model_name,
+                "ibkr_start_date": ibkr_start,
+                "returns": returns_data,
+            }
+        )
 
     @app.get("/api/models/<string:model_name>/portfolios")
     def get_historical_portfolios(model_name: str):
