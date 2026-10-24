@@ -117,6 +117,22 @@ def init_db() -> None:
             """
         )
 
+        # Real daily returns of models traded on IBKR (written by
+        # ibkr-trader's report phase). No FK to models: the whole-account
+        # row ("ibkr_account") is not a model.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ibkr_returns (
+                model_name TEXT NOT NULL,
+                return_date DATE NOT NULL,
+                real_return DOUBLE PRECISION NOT NULL,
+                pnl DOUBLE PRECISION,
+                capital DOUBLE PRECISION,
+                PRIMARY KEY (model_name, return_date)
+            )
+            """
+        )
+
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS settings (
@@ -427,6 +443,49 @@ def replace_model_returns(model_name: str, returns_data: list[dict[str, Any]]) -
             """,
             rows,
         )
+
+
+def replace_ibkr_returns(rows: list[tuple[str, date, float, float | None, float | None]]) -> None:
+    """
+    rows: (model_name, return_date, real_return, pnl, capital). Replaces the
+    whole table, since the source CSV is the complete history.
+    """
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM ibkr_returns")
+        if rows:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO ibkr_returns
+                    (model_name, return_date, real_return, pnl, capital)
+                VALUES %s
+                ON CONFLICT (model_name, return_date) DO UPDATE SET
+                    real_return = EXCLUDED.real_return,
+                    pnl = EXCLUDED.pnl,
+                    capital = EXCLUDED.capital
+                """,
+                rows,
+            )
+
+
+def get_ibkr_model_names() -> list[str]:
+    with get_cursor() as cur:
+        cur.execute("SELECT DISTINCT model_name FROM ibkr_returns ORDER BY model_name")
+        return [row["model_name"] for row in cur.fetchall()]
+
+
+def get_ibkr_returns(model_name: str) -> list[dict[str, Any]]:
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT return_date, real_return, pnl, capital
+            FROM ibkr_returns
+            WHERE model_name = %s
+            ORDER BY return_date
+            """,
+            (model_name,),
+        )
+        return [dict(row) for row in cur.fetchall()]
 
 
 def get_model_returns(model_name: str) -> list[dict[str, Any]]:

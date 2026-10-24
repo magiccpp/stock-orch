@@ -30,6 +30,10 @@ STOCKS_DATA_PATH = Path(
     os.getenv("STOCKS_DATA_PATH", BASE_DIR / "stocks_data.csv")
 ).resolve()
 
+IBKR_RETURNS_PATH = Path(
+    os.getenv("IBKR_RETURNS_PATH", BASE_DIR / "data" / "ibkr" / "real_returns.csv")
+).resolve()
+
 SP500_SYMBOL_SETTING = "sp500_symbol"
 
 # Matches filenames such as:
@@ -181,11 +185,45 @@ def recompute_model_returns() -> None:
         )
 
 
+def import_ibkr_returns() -> None:
+    """
+    Loads the real daily returns ibkr-trader records for the models it
+    trades on the IBKR paper account (columns: date, model, real_return,
+    pnl, capital, ...). The file is the full history, so the table is
+    replaced on every run.
+    """
+    if not IBKR_RETURNS_PATH.is_file():
+        print(f"ibkr returns file not found at {IBKR_RETURNS_PATH}, skipping")
+        return
+
+    df = pd.read_csv(IBKR_RETURNS_PATH)
+    df = df.dropna(subset=["date", "model", "real_return"])
+    # A re-run report for the same day overwrites the earlier row.
+    df = df.drop_duplicates(subset=["model", "date"], keep="last")
+
+    def optional(value):
+        return None if pd.isna(value) else float(value)
+
+    rows = [
+        (
+            str(row.model),
+            pd.Timestamp(row.date).date(),
+            float(row.real_return),
+            optional(getattr(row, "pnl", None)),
+            optional(getattr(row, "capital", None)),
+        )
+        for row in df.itertuples(index=False)
+    ]
+    db.replace_ibkr_returns(rows)
+    print(f"ibkr returns: {len(rows)} row(s) for {df['model'].nunique()} model(s)")
+
+
 def main() -> None:
     db.init_db()
     import_models_and_portfolios()
     import_stock_prices()
     recompute_model_returns()
+    import_ibkr_returns()
 
 
 if __name__ == "__main__":
