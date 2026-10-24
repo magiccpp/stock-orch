@@ -1,7 +1,7 @@
 import { BrainCircuit, Check, RefreshCw, Eye, Users } from 'lucide-react';
 import AuthPanel from './AuthPanel.jsx';
 
-export default function ModelSidebar({ models, selected, focusedModel, loading, onToggle, onFocus, onRefresh, visits }) {
+export default function ModelSidebar({ models, ibkrModels = [], selected, focusedModel, loading, onToggle, onFocus, onRefresh, visits }) {
   return (
     <aside className="sidebar panel">
       <div className="brand">
@@ -31,7 +31,13 @@ export default function ModelSidebar({ models, selected, focusedModel, loading, 
               >
                 {isSelected && <Check size={13} strokeWidth={3} />}
               </button>
-              <div className="model-copy"><strong>{model}</strong><span>{isSelected ? 'Visible in chart' : 'Not selected'}</span></div>
+              <div className="model-copy">
+                <strong>{model}</strong>
+                <span>
+                  {ibkrModels.includes(model) && <em className="ibkr-badge" title="Traded on the IBKR paper account">IBKR live</em>}
+                  {isSelected ? 'Visible in chart' : 'Not selected'}
+                </span>
+              </div>
               <span className={`status-dot ${isSelected ? 'online' : ''}`} />
             </div>
           );

@@ -7,6 +7,7 @@ import { buildPerformanceSeries, mergePerformanceSeries, findClosestPortfolioInd
 
 export default function App() {
   const [models, setModels] = useState([]);
+  const [ibkrModels, setIbkrModels] = useState([]);
   const [selectedModels, setSelectedModels] = useState(() => {
     try { return JSON.parse(localStorage.getItem('selectedModels')) || []; } catch { return []; }
   });
@@ -46,6 +47,7 @@ export default function App() {
       const nextModels = payload.models || [];
       const preferredModel = nextModels.includes('human') ? 'human' : (nextModels[0] || '');
       setModels(nextModels);
+      setIbkrModels(payload.ibkr_models || []);
       setSelectedModels((current) => {
         if (current.length) {
           return current.filter((m) => nextModels.includes(m));
@@ -187,7 +189,7 @@ export default function App() {
 
   return (
     <main className="app-shell" style={{ '--sidebar-width': `${sidebarWidth}px` }}>
-      <ModelSidebar models={models} selected={selectedModels} focusedModel={displayModel} loading={loadingModels} onToggle={toggleModel} onFocus={setFocusedModel} onRefresh={loadModels} visits={visits} />
+      <ModelSidebar models={models} ibkrModels={ibkrModels} selected={selectedModels} focusedModel={displayModel} loading={loadingModels} onToggle={toggleModel} onFocus={setFocusedModel} onRefresh={loadModels} visits={visits} />
       <div
         className={`resize-handle resize-handle--vertical ${resizing === 'sidebar' ? 'active' : ''}`}
         onMouseDown={startResize('sidebar')}
