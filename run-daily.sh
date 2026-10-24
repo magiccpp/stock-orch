@@ -12,5 +12,8 @@ python3 compare_visual_new.py
 # directly.
 docker compose exec -T stock_portfolio_api python import_data.py
 
-rsync -av --ignore-existing ./models_output_json/* vpn:/home/ken/git/stock-orch/models_output_json/
-rsync -av --inplace stocks_data.csv vpn:/home/ken/git/stock-orch/stocks_data.csv
+rsync -av --ignore-existing ./models_output_json/* vpn-2:/home/ken/git/stock-orch/models_output_json/
+rsync -av --inplace stocks_data.csv vpn-2:/home/ken/git/stock-orch/stocks_data.csv
+
+# Real IBKR paper returns (written by ~/git/ibkr-trader report at 07:30) for the dashboard.
+rsync -av data/ibkr/ vpn-2:/home/ken/git/stock-orch/data/ibkr/
