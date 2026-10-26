@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 """Generate the price-only factor models used by stock-orch.
 
 Models
@@ -10,15 +10,19 @@ factor_reversal_weekly        5-day cross-sectional reversal among stocks that
                               are still above their 200-day moving average,
                               20 names, equal-risk weighted.
 factor_multifactor_weekly     50/50 blend of the two sleeves above.
-factor_momentum_short_weekly  mirror of momentum: shorts the worst 6-1 month
-                              losers among stocks below their 200-day average.
-factor_reversal_short_weekly  mirror of reversal: shorts the biggest 5-day
-                              gainers among stocks below their 200-day average,
-                              held until they recover above it.
+factor_momentum_long_short_weekly
+                              half the momentum book long, half its mirror
+                              short: the worst 6-1 month losers among stocks
+                              below their 200-day average.
+factor_reversal_long_short_weekly
+                              half the reversal book long, half its mirror
+                              short: the biggest 5-day gainers among stocks
+                              below their 200-day average, held short until
+                              they recover above it.
 
 All books stay 95% invested whatever the S&P 500 does: an earlier overlay
 halved exposure when the index was below its 200-day average, but the index
-can whipsaw around that line. Short books are written as negative weights
+can whipsaw around that line. Short legs are written as negative weights
 with "operation": "short".
 
 Everything is walk-forward: a portfolio file dated D only uses prices up to
@@ -149,6 +153,17 @@ def gen_reversal(px, rets, spx, valid, start, N=20, lookback=5, cap=0.10, short=
     return out
 
 
+def blend(a, b):
+    """50/50 mix of two weight histories with the same dates."""
+    bmap = dict(b)
+    out = []
+    for D, wa in a:
+        wb = bmap.get(D, {})
+        w = {k: 0.5 * wa.get(k, 0.0) + 0.5 * wb.get(k, 0.0) for k in set(wa) | set(wb)}
+        out.append((D, {k: v for k, v in w.items() if abs(v) > 1e-9}))
+    return out
+
+
 def write_model(root, name, w_hist, desc):
     d = os.path.join(root, name)
     os.makedirs(d, exist_ok=True)
@@ -191,18 +206,19 @@ DESCRIPTIONS = {
         "trend-filtered. Aims to smooth the two sleeves' drawdowns by "
         "combining opposing entry signals. Price-only, walk-forward."
     ),
-    "factor_momentum_short_weekly": (
-        "Short-side mirror of factor_momentum_weekly on US large caps, weekly "
-        "rebalance. Among stocks below their 200-day moving average, shorts "
-        "the 25 with the weakest 6-1 month momentum, inverse-volatility "
-        "weighted, 10% cap, 95% short. Price-only, walk-forward."
+    "factor_momentum_long_short_weekly": (
+        "Long/short 6-1 month momentum on US large caps, weekly rebalance. "
+        "Half the book is long the factor_momentum_weekly picks (strongest "
+        "momentum above the 200-day average); the other half is short the 25 "
+        "weakest-momentum stocks below their 200-day average, inverse-"
+        "volatility weighted. Roughly market-neutral. Price-only, walk-forward."
     ),
-    "factor_reversal_short_weekly": (
-        "Short-side mirror of factor_reversal_weekly. Each week, shorts the "
-        "biggest 5-day gainers among stocks still below their 200-day moving "
-        "average (a bounce inside a downtrend), then holds each short until "
-        "the stock recovers above that average (or a slot is vacated); 20 "
-        "names, equal weight, 10% cap, 95% short. Price-only, walk-forward."
+    "factor_reversal_long_short_weekly": (
+        "Long/short dip/bounce model on US large caps. Half the book is long "
+        "the factor_reversal_weekly picks (5-day dips in uptrends, held while "
+        "the uptrend lasts); the other half is short the biggest 5-day "
+        "bounces among stocks below their 200-day average, held until they "
+        "recover above it. Roughly market-neutral. Price-only, walk-forward."
     ),
 }
 
@@ -220,19 +236,16 @@ def main():
     mom_short = gen_momentum(px, rets, spx, valid, args.start, short=True)
     rev_short = gen_reversal(px, rets, spx, valid, args.start, short=True)
 
-    rmap = dict(rev)
-    comb = []
-    for D, wm in mom:
-        wr = rmap.get(D, {})
-        w = {k: 0.5 * wm.get(k, 0.0) + 0.5 * wr.get(k, 0.0) for k in set(wm) | set(wr)}
-        comb.append((D, {k: v for k, v in w.items() if v > 1e-9}))
+    comb = blend(mom, rev)
+    mom_ls = blend(mom, mom_short)
+    rev_ls = blend(rev, rev_short)
 
     os.makedirs(args.out, exist_ok=True)
     for name, wh in [("factor_momentum_weekly", mom),
                      ("factor_reversal_weekly", rev),
                      ("factor_multifactor_weekly", comb),
-                     ("factor_momentum_short_weekly", mom_short),
-                     ("factor_reversal_short_weekly", rev_short)]:
+                     ("factor_momentum_long_short_weekly", mom_ls),
+                     ("factor_reversal_long_short_weekly", rev_ls)]:
         write_model(args.out, name, wh, DESCRIPTIONS[name])
         print(f"{name}: {len(wh)} files, {wh[0][0].date()}..{wh[-1][0].date()}")
 
