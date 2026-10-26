@@ -1,15 +1,25 @@
-﻿#!/usr/bin/env python
-"""Generate the three price-only factor models used by stock-orch.
+#!/usr/bin/env python
+"""Generate the price-only factor models used by stock-orch.
 
 Models
 ------
-factor_momentum_weekly      6-1 month cross-sectional momentum, trend-filtered,
-                            inverse-vol weighted, 25 names, 50% cash when the
-                            S&P 500 is below its 200-day moving average.
-factor_reversal_weekly      5-day cross-sectional reversal among stocks that are
-                            still above their 200-day moving average, 20 names,
-                            equal-risk weighted, same regime overlay.
-factor_multifactor_weekly   50/50 blend of the two sleeves above.
+factor_momentum_weekly        6-1 month cross-sectional momentum among stocks
+                              above their 200-day moving average, inverse-vol
+                              weighted, 25 names.
+factor_reversal_weekly        5-day cross-sectional reversal among stocks that
+                              are still above their 200-day moving average,
+                              20 names, equal-risk weighted.
+factor_multifactor_weekly     50/50 blend of the two sleeves above.
+factor_momentum_short_weekly  mirror of momentum: shorts the worst 6-1 month
+                              losers among stocks below their 200-day average.
+factor_reversal_short_weekly  mirror of reversal: shorts the biggest 5-day
+                              gainers among stocks below their 200-day average,
+                              held until they recover above it.
+
+All books stay 95% invested whatever the S&P 500 does: an earlier overlay
+halved exposure when the index was below its 200-day average, but the index
+can whipsaw around that line. Short books are written as negative weights
+with "operation": "short".
 
 Everything is walk-forward: a portfolio file dated D only uses prices up to
 D's close, and stock-orch starts applying it on the next trading day.
@@ -72,40 +82,41 @@ def waterfill(scores, invest, cap):
     return w[w > 1e-9]
 
 
-def signal_frame(D, px, rets, valid, mom_lb=126, skip=21, vol_lb=63):
+INVEST = 0.95
+
+
+def signal_frame(D, px, rets, valid, mom_lb=126, skip=21, vol_lb=63, uptrend=True):
+    """Eligible names on D: in an uptrend (above the 200-day SMA) for the long
+    books, in a downtrend (below it) for the short books."""
     price = px.loc[D]
     ok = (valid.loc[D] >= 190) & (price > 5)
     sma = px.rolling(200, min_periods=180).mean().loc[D]
     mom = (px.shift(skip) / px.shift(mom_lb) - 1).loc[D]
     vol = rets.rolling(vol_lb, min_periods=40).std().loc[D] * np.sqrt(TRADING_DAYS)
-    df = pd.DataFrame({"price": price, "trend": price > sma, "mom": mom, "vol": vol})
+    trend = price > sma if uptrend else price < sma
+    df = pd.DataFrame({"price": price, "trend": trend, "mom": mom, "vol": vol})
     return df[ok.fillna(False) & df["trend"].fillna(False)
               & df["mom"].notna() & df["vol"].notna()]
 
 
-def regime_invest(spx, D, risk_off=0.5):
-    sma = spx.rolling(200, min_periods=180).mean().loc[D]
-    return 0.95 if spx.loc[D] > sma else risk_off
-
-
-def gen_momentum(px, rets, spx, valid, start, N=25, vol_pen=0.0,
-                 risk_off=0.5, cap=0.10):
+def gen_momentum(px, rets, spx, valid, start, N=25, vol_pen=0.0, cap=0.10, short=False):
+    """Long: strongest 6-1 month momentum among uptrending names.
+    Short: weakest among downtrending names, as negative weights."""
     out = []
     for D in rebalance_dates(px.index, "W", start):
-        df = signal_frame(D, px, rets, valid)
+        df = signal_frame(D, px, rets, valid, uptrend=not short)
         if len(df) < 5:
             out.append((D, {}))
             continue
         z = lambda x: (x - x.mean()) / x.std(ddof=0) if x.std(ddof=0) else x * 0
         score = z(df["mom"]) - vol_pen * z(df["vol"])
-        pick = score.sort_values(ascending=False).head(N).index
-        w = waterfill(1 / df.loc[pick, "vol"], regime_invest(spx, D, risk_off), cap)
-        out.append((D, w.to_dict()))
+        pick = score.sort_values(ascending=short).head(N).index
+        w = waterfill(1 / df.loc[pick, "vol"], INVEST, cap)
+        out.append((D, (-w if short else w).to_dict()))
     return out
 
 
-def gen_reversal(px, rets, spx, valid, start, N=20, lookback=5,
-                 risk_off=0.5, cap=0.10):
+def gen_reversal(px, rets, spx, valid, start, N=20, lookback=5, cap=0.10, short=False):
     """Dip entry + hold-until-trend-break.
 
     Each week, names that are still eligible (above the 200-day SMA) are
@@ -114,13 +125,17 @@ def gen_reversal(px, rets, spx, valid, start, N=20, lookback=5,
     the book per week and returned only +3% over 2025-03..2026-10 after
     costs, so the exit rule -- hold while the uptrend lasts -- is what
     carries the strategy.
+
+    short=True mirrors it: short the biggest 5-day gainers among names below
+    their 200-day SMA (a bounce inside a downtrend) and hold the short until
+    the name recovers above that average.
     """
     out = []
     prev = []
     for D in rebalance_dates(px.index, "W", start):
-        df = signal_frame(D, px, rets, valid)
-        rev = -(px / px.shift(lookback) - 1).loc[D]
-        df = df.join(rev.rename("rev"))
+        df = signal_frame(D, px, rets, valid, uptrend=not short)
+        move = (px / px.shift(lookback) - 1).loc[D]
+        df = df.join((move if short else -move).rename("rev"))
         df = df[df["rev"].notna()]
         if len(df) < 5:
             out.append((D, {}))
@@ -128,8 +143,8 @@ def gen_reversal(px, rets, spx, valid, start, N=20, lookback=5,
         ranked = df.sort_values("rev", ascending=False)
         keep = [t for t in prev if t in ranked.index]
         picks = list(dict.fromkeys(keep + list(ranked.head(N).index)))[:N]
-        w = waterfill(pd.Series(1.0, index=picks), regime_invest(spx, D, risk_off), cap)
-        out.append((D, w.to_dict()))
+        w = waterfill(pd.Series(1.0, index=picks), INVEST, cap)
+        out.append((D, (-w if short else w).to_dict()))
         prev = picks
     return out
 
@@ -142,8 +157,14 @@ def write_model(root, name, w_hist, desc):
     with open(os.path.join(d, "desc.txt"), "w") as f:
         f.write(desc.strip() + "\n")
     for D, w in w_hist:
-        rows = [{"id": k, "weight": round(float(v), 6)}
-                for k, v in sorted(w.items(), key=lambda x: (-x[1], x[0])) if v > 0]
+        rows = []
+        for k, v in sorted(w.items(), key=lambda x: (-abs(x[1]), x[0])):
+            if abs(v) <= 1e-9:
+                continue
+            row = {"id": k, "weight": round(float(v), 6)}
+            if v < 0:
+                row["operation"] = "short"
+            rows.append(row)
         path = os.path.join(d, f"ticket_to_buy_{D.strftime('%Y%m%d')}.json")
         with open(path, "w") as f:
             json.dump(rows, f)
@@ -153,25 +174,35 @@ DESCRIPTIONS = {
     "factor_momentum_weekly": (
         "Cross-sectional 6-1 month momentum on US large caps, weekly rebalance. "
         "Requires price above its 200-day moving average; ranks by momentum, "
-        "inverse-volatility weighted, 25 names, 10% cap. Cuts gross exposure to "
-        "50% when the S&P 500 is below its 200-day moving average. Price-only, "
-        "walk-forward, no look-ahead."
+        "inverse-volatility weighted, 25 names, 10% cap, 95% invested. "
+        "Price-only, walk-forward, no look-ahead."
     ),
     "factor_reversal_weekly": (
         "Dip-entry / trend-hold model on US large caps. Each week, buys the "
         "biggest 5-day losers that are still above their 200-day moving "
         "average, then holds each name until it loses that 200-day trend (or "
-        "a slot is vacated); 20 names, equal-risk weighted, 10% cap. Cuts "
-        "gross exposure to 50% when the S&P 500 is below its 200-day moving "
-        "average. Weekly files, but the trend-driven exit keeps turnover low. "
+        "a slot is vacated); 20 names, equal-risk weighted, 10% cap, 95% "
+        "invested. Weekly files, but the trend-driven exit keeps turnover low. "
         "Price-only, walk-forward."
     ),
     "factor_multifactor_weekly": (
         "Equal blend of factor_momentum_weekly and factor_reversal_weekly: "
         "50% momentum winners + 50% dip-entry/trend-hold names, both "
-        "trend-filtered and regime-scaled. Aims to smooth the two sleeves' "
-        "drawdowns by combining opposing entry signals. Price-only, "
-        "walk-forward."
+        "trend-filtered. Aims to smooth the two sleeves' drawdowns by "
+        "combining opposing entry signals. Price-only, walk-forward."
+    ),
+    "factor_momentum_short_weekly": (
+        "Short-side mirror of factor_momentum_weekly on US large caps, weekly "
+        "rebalance. Among stocks below their 200-day moving average, shorts "
+        "the 25 with the weakest 6-1 month momentum, inverse-volatility "
+        "weighted, 10% cap, 95% short. Price-only, walk-forward."
+    ),
+    "factor_reversal_short_weekly": (
+        "Short-side mirror of factor_reversal_weekly. Each week, shorts the "
+        "biggest 5-day gainers among stocks still below their 200-day moving "
+        "average (a bounce inside a downtrend), then holds each short until "
+        "the stock recovers above that average (or a slot is vacated); 20 "
+        "names, equal weight, 10% cap, 95% short. Price-only, walk-forward."
     ),
 }
 
@@ -186,12 +217,8 @@ def main():
     px, rets, spx, valid = load_prices(args.csv)
     mom = gen_momentum(px, rets, spx, valid, args.start)
     rev = gen_reversal(px, rets, spx, valid, args.start)
-
-    last = px.index[-1]
-    if mom[-1][0] != last:
-        mom = gen_momentum(px, rets, spx, valid, args.start)
-    if rev[-1][0] != last:
-        rev = gen_reversal(px, rets, spx, valid, args.start)
+    mom_short = gen_momentum(px, rets, spx, valid, args.start, short=True)
+    rev_short = gen_reversal(px, rets, spx, valid, args.start, short=True)
 
     rmap = dict(rev)
     comb = []
@@ -203,7 +230,9 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     for name, wh in [("factor_momentum_weekly", mom),
                      ("factor_reversal_weekly", rev),
-                     ("factor_multifactor_weekly", comb)]:
+                     ("factor_multifactor_weekly", comb),
+                     ("factor_momentum_short_weekly", mom_short),
+                     ("factor_reversal_short_weekly", rev_short)]:
         write_model(args.out, name, wh, DESCRIPTIONS[name])
         print(f"{name}: {len(wh)} files, {wh[0][0].date()}..{wh[-1][0].date()}")
 
