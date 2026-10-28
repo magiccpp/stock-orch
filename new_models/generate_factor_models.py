@@ -57,14 +57,17 @@ def load_prices(csv_path):
 
 
 def rebalance_dates(index, freq, start):
+    """Last trading day of each week (or month) since start. The current week
+    only counts once it reaches Friday: a provisional mid-week file would be
+    replaced by a different one the next day."""
     s = pd.Series(index, index=index)
     if freq == "W":
         g = s.groupby([index.isocalendar().year, index.isocalendar().week]).tail(1)
     else:
         g = s.groupby([index.year, index.month]).tail(1)
     out = [d for d in g.index if d >= pd.Timestamp(start)]
-    if index[-1] not in out:
-        out.append(index[-1])
+    if freq == "W" and out and out[-1] == index[-1] and index[-1].weekday() < 4:
+        out.pop()
     return out
 
 
