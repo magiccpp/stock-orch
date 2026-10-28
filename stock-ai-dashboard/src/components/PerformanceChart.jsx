@@ -14,25 +14,32 @@ const SINCE_IBKR_KEY = 'chartSinceIbkrStart';
 const SP500 = 'S&P 500';
 
 export const ibkrSeriesName = (model) => `${model} · IBKR`;
+const RAW = ' raw';
 
 // The real IBKR curve starts from the theoretical curve's value on the day
 // before trading began, so the two lines share a starting point and their
 // gap is the live tracking error.
 function addIbkrSeries(dateMap, model, returns) {
   let anchor = 0;
+  let dayBefore = null;
   for (const item of returns) {
     if (item.ibkr_cumulative_return == null) {
       if (item.model_cumulative_return != null) anchor = item.model_cumulative_return;
+      if (!dayBefore || item.date > dayBefore) dayBefore = item.date;
       continue;
     }
     const existing = dateMap.get(item.date) || { date: item.date };
     existing[ibkrSeriesName(model)] = (1 + anchor) * (1 + item.ibkr_cumulative_return) - 1;
+    // Unanchored real return, for the "since IBKR start" view
+    existing[ibkrSeriesName(model) + RAW] = item.ibkr_cumulative_return;
     dateMap.set(item.date, existing);
   }
+  if (dayBefore && dateMap.has(dayBefore)) dateMap.get(dayBefore)[ibkrSeriesName(model) + RAW] = 0;
 }
 
-// Restart every series at 0% on `baseDate` (the last day before IBKR
-// trading began), dropping earlier dates.
+// Restart the S&P 500 at 0% on `baseDate` (the last day before IBKR trading
+// began), dropping earlier dates. Each IBKR line shows its own real return,
+// starting at 0% the day before that model began trading.
 function rebase(rows, baseDate, keys) {
   const base = {};
   for (const row of rows) {
@@ -44,9 +51,12 @@ function rebase(rows, baseDate, keys) {
     .map((row) => {
       const next = { date: row.date };
       for (const key of keys) {
+        if (key.endsWith(' · IBKR')) {
+          if (row[key + RAW] != null) next[key] = row[key + RAW];
+          continue;
+        }
         if (row[key] == null) continue;
-        const from = key.endsWith(' · IBKR') ? base[key.replace(' · IBKR', '')] : base[key];
-        next[key] = (1 + row[key]) / (1 + (from ?? 0)) - 1;
+        next[key] = (1 + row[key]) / (1 + (base[key] ?? 0)) - 1;
       }
       return next;
     });
@@ -215,7 +225,9 @@ export default function PerformanceChart({ models, loading: externalLoading, onS
           <h1>Cumulative Return</h1>
           <p>
             Historical strategy performance compared to S&P 500 benchmark.
-            {hasLive && ' Dotted lines are real returns from the IBKR paper account.'}
+            {hasLive && (sinceIbkr
+              ? ' Real returns from the IBKR paper account since trading began.'
+              : ' Dotted lines are real returns from the IBKR paper account.')}
           </p>
         </div>
         <div className="chart-actions">
@@ -325,8 +337,8 @@ export default function PerformanceChart({ models, loading: externalLoading, onS
                 activeDot={{ r: 4 }} 
               />
               
-              {/* Model lines */}
-              {models.map((model, index) => (
+              {/* Model lines (theoretical); hidden in the "since IBKR start" view */}
+              {!(sinceIbkr && hasLive) && models.map((model, index) => (
                 <Line 
                   key={model} 
                   type="monotone" 
