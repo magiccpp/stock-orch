@@ -373,8 +373,12 @@ def update_portfolio_windows(model_name: str, windows: list[dict[str, Any]]) -> 
             )
 
 
-def insert_stock_prices_if_missing(rows: list[tuple[str, date, float]]) -> int:
-    """rows: (symbol, price_date, price). Returns the number of rows inserted."""
+def upsert_stock_prices(rows: list[tuple[str, date, float]]) -> int:
+    """
+    rows: (symbol, price_date, price). Inserts new prices and updates changed
+    ones (Yahoo revises past closes, e.g. for dividend adjustments). Returns
+    the number of rows inserted or changed.
+    """
     if not rows:
         return 0
     with get_cursor() as cur:
@@ -386,7 +390,8 @@ def insert_stock_prices_if_missing(rows: list[tuple[str, date, float]]) -> int:
             """
             INSERT INTO stock_prices (symbol, price_date, price)
             VALUES %s
-            ON CONFLICT (symbol, price_date) DO NOTHING
+            ON CONFLICT (symbol, price_date) DO UPDATE SET price = EXCLUDED.price
+                WHERE stock_prices.price IS DISTINCT FROM EXCLUDED.price
             RETURNING 1
             """,
             rows,

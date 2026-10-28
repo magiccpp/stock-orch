@@ -157,10 +157,10 @@ def import_stock_prices() -> None:
         for price_date, symbol, price in long_df.itertuples(index=False, name=None)
     ]
 
-    inserted = db.insert_stock_prices_if_missing(rows)
+    changed = db.upsert_stock_prices(rows)
     db.set_setting(SP500_SYMBOL_SETTING, sp500_symbol)
     print(
-        f"stock prices: {inserted} new row(s) inserted "
+        f"stock prices: {changed} new or changed row(s) "
         f"({len(rows)} candidate rows checked), sp500 symbol={sp500_symbol!r}"
     )
 
