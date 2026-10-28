@@ -160,7 +160,7 @@ def import_stock_prices() -> None:
     changed = db.upsert_stock_prices(rows)
     db.set_setting(SP500_SYMBOL_SETTING, sp500_symbol)
     print(
-        f"stock prices: {changed} new or changed row(s) "
+        f"stock prices: {changed} new, changed or removed row(s) "
         f"({len(rows)} candidate rows checked), sp500 symbol={sp500_symbol!r}"
     )
 

@@ -227,7 +227,8 @@ def upsert_model(name: str, description: str | None) -> None:
             """
             INSERT INTO models (name, description)
             VALUES (%s, %s)
-            ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description
+            ON CONFLICT (name) DO UPDATE
+                SET description = COALESCE(EXCLUDED.description, models.description)
             """,
             (name, description),
         )
@@ -377,11 +378,27 @@ def upsert_stock_prices(rows: list[tuple[str, date, float]]) -> int:
     """
     rows: (symbol, price_date, price). Inserts new prices and updates changed
     ones (Yahoo revises past closes, e.g. for dividend adjustments). Returns
-    the number of rows inserted or changed.
+    the number of rows inserted, changed or removed.
     """
     if not rows:
         return 0
     with get_cursor() as cur:
+        # Prices that are no longer in the source file (dropped symbols,
+        # blanked dates) go too, so every database matches the CSV exactly.
+        cur.execute("CREATE TEMP TABLE incoming (symbol TEXT, price_date DATE) ON COMMIT DROP")
+        psycopg2.extras.execute_values(
+            cur, "INSERT INTO incoming VALUES %s", [(s, d) for s, d, _ in rows], page_size=5000
+        )
+        cur.execute(
+            """
+            DELETE FROM stock_prices p
+            WHERE NOT EXISTS (
+                SELECT 1 FROM incoming i
+                WHERE i.symbol = p.symbol AND i.price_date = p.price_date
+            )
+            """
+        )
+        removed = cur.rowcount
         # fetch=True makes execute_values() collect the RETURNING output
         # across every page, so the count is accurate regardless of paging
         # (plain cur.rowcount would only reflect the last page).
@@ -398,7 +415,7 @@ def upsert_stock_prices(rows: list[tuple[str, date, float]]) -> int:
             page_size=5000,
             fetch=True,
         )
-        return len(inserted)
+        return len(inserted) + removed
 
 
 def get_setting(key: str) -> str | None:
