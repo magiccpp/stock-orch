@@ -1,0 +1,49 @@
+# Local copy of the xiaodong.io stack on nuc2 (API 5101, dashboard 5273),
+# reading the same files that run-daily.sh syncs to vpn-2. run-daily.sh
+# imports into it every day.
+#   docker compose -f docker-compose.local.yaml up -d --build
+name: orch-local
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: local
+      POSTGRES_PASSWORD: ${LOCAL_DB_PASSWORD:-local-only}
+      POSTGRES_DB: local
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U local -d local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  stock_portfolio_api:
+    build: ./stock_portfolio_api
+    image: stock_portfolio_api:local
+    environment:
+      STOCKS_DATA_PATH: /app/stocks_data.csv
+      MODELS_OUTPUT_DIR: /app/models_output_json
+      VISITS_DATA_PATH: /app/data/visits.json
+      DATABASE_URL: postgresql://local:${LOCAL_DB_PASSWORD:-local-only}@postgres:5432/local
+      SECRET_KEY: ${LOCAL_SECRET_KEY:-local-only}
+    volumes:
+      - ./models_output_json:/app/models_output_json:ro
+      - ./stocks_data.csv:/app/stocks_data.csv:ro
+      - ./data:/app/data
+    ports:
+      - "5101:5001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  stock_ai_dashboard:
+    build: ./stock-ai-dashboard
+    image: stock-ai-dashboard:local
+    depends_on:
+      - stock_portfolio_api
+    ports:
+      - "5273:80"
+
+volumes:
+  postgres_data:
