@@ -91,24 +91,42 @@ def import_models_and_portfolios() -> None:
         )
         db.upsert_model(model_name, description or None)
 
+        # Some models (e.g. the factor generator) rewrite their whole history,
+        # so files are compared by content, not just by name: changed files
+        # are re-imported and files that disappeared are dropped.
         files = find_portfolio_files(model_dir)
-        already_imported = db.get_existing_portfolio_filenames(model_name)
-        new_files = [
-            (portfolio_date, path)
-            for portfolio_date, path in files
-            if path.name not in already_imported
-        ]
+        stored = db.get_stored_portfolio_data(model_name)
+        added = changed = 0
 
-        for portfolio_date, path in new_files:
+        for portfolio_date, path in files:
             try:
                 portfolio_json = json.loads(path.read_text(encoding="utf-8"))
             except json.JSONDecodeError as exc:
                 print(f"  skipping invalid JSON in {path.name}: {exc}")
                 continue
-            db.insert_portfolio(model_name, portfolio_date.date(), path.name, portfolio_json)
+            if path.name not in stored:
+                db.insert_portfolio(model_name, portfolio_date.date(), path.name, portfolio_json)
+                added += 1
+            elif stored[path.name] != portfolio_json:
+                db.update_portfolio_data(model_name, path.name, portfolio_json)
+                changed += 1
 
-        if new_files:
-            print(f"{model_name}: imported {len(new_files)} new portfolio file(s)")
+        removed = sorted(set(stored) - {path.name for _, path in files})
+        if removed:
+            db.delete_portfolios(model_name, removed)
+
+        if added or changed or removed:
+            print(f"{model_name}: {added} new, {changed} changed, "
+                  f"{len(removed)} removed portfolio file(s)")
+
+    # Models whose directory is gone (e.g. renamed) are dropped entirely --
+    # unless the whole directory looks empty, which is more likely a missing
+    # mount than every model being deleted.
+    on_disk = {entry.name for entry in model_dirs}
+    for model_name in db.get_all_model_names() if on_disk else []:
+        if model_name not in on_disk:
+            db.delete_model(model_name)
+            print(f"{model_name}: directory gone, model removed")
 
 
 def import_stock_prices() -> None:

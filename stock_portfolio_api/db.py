@@ -260,6 +260,41 @@ def get_existing_portfolio_filenames(model_name: str) -> set[str]:
         return {row["filename"] for row in cur.fetchall()}
 
 
+def get_stored_portfolio_data(model_name: str) -> dict[str, Any]:
+    """{filename: portfolio_data} for everything imported for a model."""
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT filename, portfolio_data FROM portfolios WHERE model_name = %s",
+            (model_name,),
+        )
+        return {row["filename"]: row["portfolio_data"] for row in cur.fetchall()}
+
+
+def update_portfolio_data(model_name: str, filename: str, portfolio_data: Any) -> None:
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            UPDATE portfolios SET portfolio_data = %s
+            WHERE model_name = %s AND filename = %s
+            """,
+            (psycopg2.extras.Json(portfolio_data), model_name, filename),
+        )
+
+
+def delete_portfolios(model_name: str, filenames: list[str]) -> None:
+    with get_cursor() as cur:
+        cur.execute(
+            "DELETE FROM portfolios WHERE model_name = %s AND filename = ANY(%s)",
+            (model_name, filenames),
+        )
+
+
+def delete_model(name: str) -> None:
+    """Removes a model with its portfolios and returns (ON DELETE CASCADE)."""
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM models WHERE name = %s", (name,))
+
+
 def insert_portfolio(
     model_name: str, portfolio_date: date, filename: str, portfolio_data: Any
 ) -> None:
@@ -411,8 +446,9 @@ def get_stock_price_series(symbol: str) -> pd.Series:
 
 def replace_model_returns(model_name: str, returns_data: list[dict[str, Any]]) -> None:
     """
-    Upserts one row per entry in returns_data (as produced by
-    portfolio_calc.calculate_model_returns()) keyed on (model_name, date).
+    Replaces the model's daily returns with returns_data (as produced by
+    portfolio_calc.calculate_model_returns()), so dates that are no longer
+    produced (e.g. a model whose history was regenerated) do not linger.
     """
     if not returns_data:
         return
@@ -428,6 +464,8 @@ def replace_model_returns(model_name: str, returns_data: list[dict[str, Any]]) -
         for entry in returns_data
     ]
     with get_cursor() as cur:
+        # Same transaction, so readers never see the model without returns.
+        cur.execute("DELETE FROM model_returns WHERE model_name = %s", (model_name,))
         psycopg2.extras.execute_values(
             cur,
             """
