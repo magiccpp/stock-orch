@@ -5,7 +5,8 @@ import {
 import { Activity, TrendingUp, MousePointerSquareDashed, X } from 'lucide-react';
 import { formatPercent } from '../lib/normalizers.js';
 
-const LINE_COLORS = ['#58a6ff', '#a78bfa', '#2dd4bf', '#f59e0b', '#fb7185', '#84cc16', '#22d3ee'];
+// Cool colours for the models first, so they never look like the warm IBKR ones.
+const LINE_COLORS = ['#58a6ff', '#a78bfa', '#2dd4bf', '#84cc16', '#22d3ee', '#f59e0b', '#fb7185'];
 // Real IBKR lines get their own warm palette so they never share a model's colour.
 const IBKR_COLORS = ['#ff8c42', '#ffd60a', '#ff4d9d', '#ff5c5c', '#f8fafc'];
 const HINT_DISMISSED_KEY = 'chartDragHintDismissed';
